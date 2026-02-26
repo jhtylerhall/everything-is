@@ -1,9 +1,12 @@
 import { Audio } from 'expo-av';
+import { GLView } from 'expo-gl';
 import { StatusBar } from 'expo-status-bar';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Renderer } from 'expo-three';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Dimensions,
   PanResponder,
+  PixelRatio,
   Platform,
   Pressable,
   SafeAreaView,
@@ -11,27 +14,30 @@ import {
   Text,
   View,
 } from 'react-native';
+import * as THREE from 'three';
 
 type Screen = 'menu' | 'game';
 
-type Particle = {
-  id: number;
+type MotionState = {
   x: number;
-  y: number;
+  z: number;
   vx: number;
-  vy: number;
-  life: number;
-  size: number;
-  color: string;
+  vz: number;
+  rx: number;
+  ry: number;
+  rz: number;
+  spinX: number;
+  spinY: number;
+  spinZ: number;
+  hop: number;
+  hopVy: number;
+  squish: number;
 };
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-const ARENA_HALF = 8.2;
-const CUBE_HALF = 0.86;
-const IMPULSE_BASE = 6.6;
-
-const TRAIL_COLORS = ['#fff8ef', '#f6e8cf', '#f0dcb8', '#e6c792'];
+const ARENA_HALF = 8.6;
+const IMPULSE_BASE = 6.8;
 
 let splooshAudioContext: any = null;
 let splooshSound: Audio.Sound | null = null;
@@ -45,10 +51,6 @@ function lerp(a: number, b: number, t: number) {
   return a + (b - a) * t;
 }
 
-function easeOutCubic(t: number) {
-  return 1 - Math.pow(1 - t, 3);
-}
-
 function playSplooshWebFallback(intensity = 1) {
   try {
     const globalAny = globalThis as any;
@@ -57,7 +59,6 @@ function playSplooshWebFallback(intensity = 1) {
 
     if (!splooshAudioContext) splooshAudioContext = new AudioCtx();
     const ctx: any = splooshAudioContext;
-
     if (ctx.state === 'suspended') ctx.resume();
 
     const now = ctx.currentTime as number;
@@ -75,7 +76,7 @@ function playSplooshWebFallback(intensity = 1) {
 
     const filter = ctx.createBiquadFilter();
     filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(1000 * intensity, now);
+    filter.frequency.setValueAtTime(980 * intensity, now);
     filter.frequency.exponentialRampToValueAtTime(170, now + 0.14);
 
     const g1 = ctx.createGain();
@@ -91,12 +92,12 @@ function playSplooshWebFallback(intensity = 1) {
 
     const osc = ctx.createOscillator();
     osc.type = 'triangle';
-    osc.frequency.setValueAtTime(176, now);
+    osc.frequency.setValueAtTime(180, now);
     osc.frequency.exponentialRampToValueAtTime(62, now + 0.16);
 
     const g2 = ctx.createGain();
     g2.gain.setValueAtTime(0.0001, now);
-    g2.gain.exponentialRampToValueAtTime(0.11 * intensity, now + 0.01);
+    g2.gain.exponentialRampToValueAtTime(0.12 * intensity, now + 0.01);
     g2.gain.exponentialRampToValueAtTime(0.0001, now + 0.17);
 
     osc.connect(g2);
@@ -104,7 +105,7 @@ function playSplooshWebFallback(intensity = 1) {
     osc.start(now);
     osc.stop(now + 0.18);
   } catch {
-    // ignore if unavailable
+    // no-op
   }
 }
 
@@ -121,7 +122,7 @@ async function ensureSplooshLoaded() {
 
         const loaded = await Audio.Sound.createAsync(
           require('./assets/sounds/cheese-sploosh.wav'),
-          { shouldPlay: false, volume: 0.84 }
+          { shouldPlay: false, volume: 0.9 }
         );
         splooshSound = loaded.sound;
       } catch {
@@ -134,18 +135,14 @@ async function ensureSplooshLoaded() {
 }
 
 function playSploosh(intensity = 1) {
-  const rate = clamp(0.9 + intensity * 0.17, 0.8, 1.45);
-  const volume = clamp(0.28 + intensity * 0.28, 0.2, 1);
+  const rate = clamp(0.9 + intensity * 0.16, 0.82, 1.4);
+  const volume = clamp(0.28 + intensity * 0.28, 0.18, 1);
 
   void (async () => {
     try {
       await ensureSplooshLoaded();
       if (splooshSound) {
-        await splooshSound.replayAsync({
-          rate,
-          shouldCorrectPitch: true,
-          volume,
-        });
+        await splooshSound.replayAsync({ rate, shouldCorrectPitch: true, volume });
         return;
       }
     } catch {
@@ -162,7 +159,7 @@ export default function App() {
   return (
     <SafeAreaView style={styles.safe}>
       {screen === 'menu' && <MainMenu onStart={() => setScreen('game')} />}
-      {screen === 'game' && <CubeSandbox onBack={() => setScreen('menu')} />}
+      {screen === 'game' && <CubeLab onBack={() => setScreen('menu')} />}
       <StatusBar style="light" />
     </SafeAreaView>
   );
@@ -174,11 +171,11 @@ function MainMenu({ onStart }: { onStart: () => void }) {
       <View style={styles.menuOrbA} />
       <View style={styles.menuOrbB} />
 
-      <Text style={styles.kicker}>CREAM CHEESE MATERIAL LAB</Text>
-      <Text style={styles.title}>Hyperreal Cube Sandbox</Text>
-      <Text style={styles.copyCenter}>No platforms. Just polish.</Text>
-      <Text style={styles.copyCenter}>Phone: swipe to shove and rotate camera.</Text>
-      <Text style={styles.copyCenter}>Desktop: WASD + Space.</Text>
+      <Text style={styles.kicker}>ADVANCED 3D PROTOTYPE</Text>
+      <Text style={styles.title}>Cream Cheese Cube Lab</Text>
+      <Text style={styles.copyCenter}>Now using real 3D rendering with expo-gl + three.</Text>
+      <Text style={styles.copyCenter}>Phone: swipe left zone to move, right zone to orbit camera.</Text>
+      <Text style={styles.copyCenter}>Desktop: W/A/S/D movement, Space burst, arrows for camera.</Text>
 
       <Pressable style={styles.menuButtonPrimary} onPress={onStart}>
         <Text style={styles.menuButtonPrimaryText}>Start Run</Text>
@@ -187,102 +184,76 @@ function MainMenu({ onStart }: { onStart: () => void }) {
   );
 }
 
-function CubeSandbox({ onBack }: { onBack: () => void }) {
-  const cubePosRef = useRef({ x: 0, z: 0 });
-  const cubeVelRef = useRef({ x: 0, z: 0 });
+function CubeLab({ onBack }: { onBack: () => void }) {
+  const rendererRef = useRef<any>(null);
+  const sceneRef = useRef<THREE.Scene | null>(null);
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const cubeRef = useRef<THREE.Mesh | null>(null);
+  const shadowRef = useRef<THREE.Mesh | null>(null);
+  const rafRef = useRef<number | null>(null);
 
-  const cubeRotRef = useRef({ x: 8, y: 18, z: 0 });
-  const cubeAngVelRef = useRef({ x: 0, y: 0, z: 0 });
+  const motionRef = useRef<MotionState>({
+    x: 0,
+    z: 0,
+    vx: 0,
+    vz: 0,
+    rx: 0.12,
+    ry: 0.32,
+    rz: 0,
+    spinX: 0,
+    spinY: 0,
+    spinZ: 0,
+    hop: 0,
+    hopVy: 0,
+    squish: 1,
+  });
 
-  const squishRef = useRef(1);
-  const sparkleRef = useRef(0);
-
-  const cameraYawRef = useRef(24);
-  const cameraPitchRef = useRef(23);
-  const cameraYawKickRef = useRef(0);
+  const cameraOrbitRef = useRef({ yaw: 24, pitch: 22 });
 
   const gestureModeRef = useRef<'move' | 'camera' | null>(null);
   const gestureLastRef = useRef({ dx: 0, dy: 0 });
-  const moveSwipeAccumRef = useRef({ dx: 0, dy: 0 });
-  const moveBurstLockRef = useRef(false);
-
-  const trailRef = useRef<Particle[]>([]);
-  const nextTrailIdRef = useRef(1);
-
-  const toastRef = useRef({ text: 'Swipe and feel the cube', life: 2.4 });
+  const swipeAccumRef = useRef({ dx: 0, dy: 0 });
+  const burstLockRef = useRef(false);
 
   const lastTsRef = useRef(0);
-  const [, forceRender] = useState(0);
+  const lastHudRef = useRef(0);
 
-  const floorPoints = useMemo(() => {
-    const points: Array<{ x: number; z: number; parity: number }> = [];
-    for (let gx = -7; gx <= 7; gx++) {
-      for (let gz = -7; gz <= 7; gz++) {
-        points.push({ x: gx * 0.9, z: gz * 0.9, parity: Math.abs(gx + gz) % 2 });
-      }
-    }
-    return points;
-  }, []);
+  const [hud, setHud] = useState({ speed: '0.00', cam: '24°' });
 
-  useEffect(() => {
-    void ensureSplooshLoaded();
-  }, []);
-
-  const spawnTrail = (count: number, energy: number, sx: number, sy: number) => {
-    for (let i = 0; i < count; i++) {
-      trailRef.current.push({
-        id: nextTrailIdRef.current++,
-        x: sx + (Math.random() - 0.5) * 28,
-        y: sy + (Math.random() - 0.5) * 14,
-        vx: (Math.random() - 0.5) * 2.5 * energy,
-        vy: (-0.8 - Math.random() * 1.8) * energy,
-        life: 0.36 + Math.random() * 0.36,
-        size: 3 + Math.random() * 5,
-        color: TRAIL_COLORS[Math.floor(Math.random() * TRAIL_COLORS.length)],
-      });
-    }
-
-    if (trailRef.current.length > 150) {
-      trailRef.current.splice(0, trailRef.current.length - 150);
-    }
-  };
-
-  const showToast = (text: string, life = 1.0) => {
-    toastRef.current = { text, life };
-  };
-
-  const applyImpulse = (sx: number, sy: number, magnitude: number) => {
-    const len = Math.hypot(sx, sy);
-    if (len < 1) return;
-
-    const nx = sx / len;
-    const ny = sy / len;
-
-    const yawRad = (cameraYawRef.current * Math.PI) / 180;
+  const pushCube = useCallback((lateral: number, forward: number, strength: number) => {
+    const motion = motionRef.current;
+    const yawRad = (cameraOrbitRef.current.yaw * Math.PI) / 180;
 
     const right = { x: Math.cos(yawRad), z: -Math.sin(yawRad) };
-    const forward = { x: Math.sin(yawRad), z: Math.cos(yawRad) };
+    const fwd = { x: Math.sin(yawRad), z: Math.cos(yawRad) };
 
-    const world = {
-      x: right.x * nx + forward.x * ny,
-      z: right.z * nx + forward.z * ny,
-    };
+    let wx = right.x * lateral + fwd.x * forward;
+    let wz = right.z * lateral + fwd.z * forward;
 
-    const impulse = IMPULSE_BASE * magnitude;
+    const l = Math.hypot(wx, wz) || 1;
+    wx /= l;
+    wz /= l;
 
-    cubeVelRef.current.x += world.x * impulse;
-    cubeVelRef.current.z += world.z * impulse;
+    const impulse = IMPULSE_BASE * strength;
 
-    cubeAngVelRef.current.x += world.z * impulse * 1.9;
-    cubeAngVelRef.current.z += -world.x * impulse * 1.9;
-    cubeAngVelRef.current.y += world.x * 0.7;
+    motion.vx += wx * impulse;
+    motion.vz += wz * impulse;
 
-    squishRef.current = clamp(0.9 + magnitude * 0.2, 0.82, 1.3);
-    sparkleRef.current = clamp(sparkleRef.current + 0.35 * magnitude, 0, 1.4);
+    motion.spinX += wz * strength * 7.2;
+    motion.spinZ += -wx * strength * 7.2;
+    motion.spinY += wx * strength * 1.8;
 
-    playSploosh(0.72 + magnitude * 0.36);
-    showToast('Cream momentum', 0.46);
-  };
+    motion.squish = 0.86;
+
+    playSploosh(0.62 + strength * 0.36);
+  }, []);
+
+  const burstForward = useCallback((strength = 1.1) => {
+    const motion = motionRef.current;
+    pushCube(0, 1, strength);
+    motion.hopVy = Math.max(motion.hopVy, 2.7 * strength);
+    motion.squish = 1.16;
+  }, [pushCube]);
 
   const panResponder = useMemo(
     () =>
@@ -290,11 +261,10 @@ function CubeSandbox({ onBack }: { onBack: () => void }) {
         onStartShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 3 || Math.abs(g.dy) > 3,
         onPanResponderGrant: (evt) => {
-          const x = evt.nativeEvent.locationX;
-          gestureModeRef.current = x > SCREEN_WIDTH * 0.54 ? 'camera' : 'move';
+          gestureModeRef.current = evt.nativeEvent.locationX > SCREEN_WIDTH * 0.52 ? 'camera' : 'move';
           gestureLastRef.current = { dx: 0, dy: 0 };
-          moveSwipeAccumRef.current = { dx: 0, dy: 0 };
-          moveBurstLockRef.current = false;
+          swipeAccumRef.current = { dx: 0, dy: 0 };
+          burstLockRef.current = false;
         },
         onPanResponderMove: (_, g) => {
           const ddx = g.dx - gestureLastRef.current.dx;
@@ -302,75 +272,48 @@ function CubeSandbox({ onBack }: { onBack: () => void }) {
           gestureLastRef.current = { dx: g.dx, dy: g.dy };
 
           if (gestureModeRef.current === 'camera') {
-            cameraYawRef.current = clamp(cameraYawRef.current + ddx * 0.43, -140, 140);
-            cameraPitchRef.current = clamp(cameraPitchRef.current - ddy * 0.25, 8, 56);
-            forceRender((n) => (n + 1) % 1000000);
+            cameraOrbitRef.current.yaw = clamp(cameraOrbitRef.current.yaw + ddx * 0.43, -150, 150);
+            cameraOrbitRef.current.pitch = clamp(cameraOrbitRef.current.pitch - ddy * 0.28, 8, 58);
             return;
           }
 
-          if (gestureModeRef.current === 'move') {
-            moveSwipeAccumRef.current.dx += ddx;
-            moveSwipeAccumRef.current.dy += ddy;
+          swipeAccumRef.current.dx += ddx;
+          swipeAccumRef.current.dy += ddy;
 
-            const accum = moveSwipeAccumRef.current;
-
-            const horizontalTrigger =
-              Math.abs(accum.dx) > 20 && Math.abs(accum.dx) > Math.abs(accum.dy) * 0.75;
-
-            if (horizontalTrigger) {
-              const dir = accum.dx > 0 ? 1 : -1;
-              const mag = clamp(0.62 + Math.abs(accum.dx) / 110, 0.62, 1.2);
-              applyImpulse(dir, 0, mag);
-              accum.dx = 0;
-              accum.dy *= 0.3;
-            }
-
-            const verticalTrigger =
-              accum.dy < -26 && Math.abs(accum.dy) > Math.abs(accum.dx) * 1.05;
-
-            if (verticalTrigger && !moveBurstLockRef.current) {
-              applyImpulse(0, 1, 1.0);
-              showToast('Up-swipe burst', 0.52);
-              moveBurstLockRef.current = true;
-              accum.dy = 0;
-            }
-
-            if (accum.dy > -8) {
-              moveBurstLockRef.current = false;
-            }
+          const a = swipeAccumRef.current;
+          if (Math.abs(a.dx) > 18 && Math.abs(a.dx) > Math.abs(a.dy) * 0.72) {
+            pushCube(a.dx > 0 ? 1 : -1, 0, clamp(0.56 + Math.abs(a.dx) / 120, 0.56, 1.2));
+            a.dx = 0;
+            a.dy *= 0.3;
           }
+
+          if (a.dy < -24 && Math.abs(a.dy) > Math.abs(a.dx) * 1.06 && !burstLockRef.current) {
+            burstForward(1.0);
+            burstLockRef.current = true;
+            a.dy = 0;
+          }
+
+          if (a.dy > -8) burstLockRef.current = false;
         },
-        onPanResponderRelease: (_, g) => {
-          if (gestureModeRef.current === 'move') {
-            const dx = moveSwipeAccumRef.current.dx;
-            const dy = moveSwipeAccumRef.current.dy;
-
-            const dist = Math.hypot(dx, dy);
-            if (dist > 16) {
-              const mag = clamp(dist / 240, 0.34, 1.1);
-              applyImpulse(dx, -dy, mag);
-            }
-
-            if (g.dy < -32 && Math.abs(g.dy) > Math.abs(g.dx) * 1.12 && !moveBurstLockRef.current) {
-              applyImpulse(0, 1, 1.04);
-              showToast('Up-swipe burst', 0.58);
-            }
-          }
-
+        onPanResponderRelease: () => {
           gestureModeRef.current = null;
           gestureLastRef.current = { dx: 0, dy: 0 };
-          moveSwipeAccumRef.current = { dx: 0, dy: 0 };
-          moveBurstLockRef.current = false;
+          swipeAccumRef.current = { dx: 0, dy: 0 };
+          burstLockRef.current = false;
         },
         onPanResponderTerminate: () => {
           gestureModeRef.current = null;
           gestureLastRef.current = { dx: 0, dy: 0 };
-          moveSwipeAccumRef.current = { dx: 0, dy: 0 };
-          moveBurstLockRef.current = false;
+          swipeAccumRef.current = { dx: 0, dy: 0 };
+          burstLockRef.current = false;
         },
       }),
-    []
+    [burstForward, pushCube]
   );
+
+  useEffect(() => {
+    void ensureSplooshLoaded();
+  }, []);
 
   useEffect(() => {
     if (Platform.OS !== 'web') return;
@@ -393,195 +336,225 @@ function CubeSandbox({ onBack }: { onBack: () => void }) {
         event.preventDefault();
       }
 
-      if (key === 'a' || key === 'arrowleft') {
-        applyImpulse(-1, 0, 0.86);
-        return;
-      }
+      if (key === 'a') return void pushCube(-1, 0, 0.8);
+      if (key === 'd') return void pushCube(1, 0, 0.8);
+      if (key === 'w') return void pushCube(0, 1, 0.86);
+      if (key === 's') return void pushCube(0, -1, 0.72);
+      if (key === ' ') return void burstForward(1.22);
 
-      if (key === 'd' || key === 'arrowright') {
-        applyImpulse(1, 0, 0.86);
-        return;
-      }
-
-      if (key === 'w') {
-        cameraPitchRef.current = clamp(cameraPitchRef.current - 4, 8, 56);
-        forceRender((n) => (n + 1) % 1000000);
-        return;
-      }
-
-      if (key === 's' || key === 'arrowdown') {
-        cameraPitchRef.current = clamp(cameraPitchRef.current + 4, 8, 56);
-        forceRender((n) => (n + 1) % 1000000);
-        return;
-      }
-
-      if (key === ' ') {
-        applyImpulse(0, 1, 1.2);
-      }
-
-      if (key === 'arrowup') {
-        applyImpulse(0, 1, 0.95);
-      }
+      if (key === 'arrowleft') cameraOrbitRef.current.yaw = clamp(cameraOrbitRef.current.yaw - 5, -150, 150);
+      if (key === 'arrowright') cameraOrbitRef.current.yaw = clamp(cameraOrbitRef.current.yaw + 5, -150, 150);
+      if (key === 'arrowup') cameraOrbitRef.current.pitch = clamp(cameraOrbitRef.current.pitch - 4, 8, 58);
+      if (key === 'arrowdown') cameraOrbitRef.current.pitch = clamp(cameraOrbitRef.current.pitch + 4, 8, 58);
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [burstForward, pushCube]);
 
-  useEffect(() => {
-    let raf = 0;
+  const onContextCreate = async (gl: any) => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
 
-    const tick = (ts: number) => {
+    const renderer = new Renderer({ gl }) as any;
+    renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
+    renderer.setPixelRatio(Math.min(2, PixelRatio.get()));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.setClearColor(0x08152a, 1);
+
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0x08152a, 10, 30);
+
+    const camera = new THREE.PerspectiveCamera(
+      50,
+      gl.drawingBufferWidth / gl.drawingBufferHeight,
+      0.1,
+      100
+    );
+
+    const hemi = new THREE.HemisphereLight(0xbfd8ff, 0x10203f, 0.85);
+    scene.add(hemi);
+
+    const key = new THREE.DirectionalLight(0xfff4de, 1.25);
+    key.position.set(6, 9, 6);
+    key.castShadow = true;
+    key.shadow.mapSize.width = 1024;
+    key.shadow.mapSize.height = 1024;
+    key.shadow.camera.near = 1;
+    key.shadow.camera.far = 24;
+    key.shadow.camera.left = -8;
+    key.shadow.camera.right = 8;
+    key.shadow.camera.top = 8;
+    key.shadow.camera.bottom = -8;
+    scene.add(key);
+
+    const rim = new THREE.PointLight(0x78aeff, 0.64, 30);
+    rim.position.set(-7, 4, -6);
+    scene.add(rim);
+
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(34, 34),
+      new THREE.MeshStandardMaterial({ color: 0x1b2f53, roughness: 0.95, metalness: 0.04 })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = 0;
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    const grid = new THREE.GridHelper(32, 36, 0x7fa6db, 0x35588c);
+    grid.position.y = 0.02;
+    (grid.material as THREE.Material).transparent = true;
+    (grid.material as THREE.Material).opacity = 0.32;
+    scene.add(grid);
+
+    const cubeMaterial = new THREE.MeshPhysicalMaterial({
+      color: 0xf6edd8,
+      roughness: 0.56,
+      metalness: 0.01,
+      clearcoat: 0.42,
+      clearcoatRoughness: 0.3,
+      sheen: 0.24,
+      sheenColor: new THREE.Color(0xf9f1df),
+      specularIntensity: 0.35,
+    });
+
+    const cube = new THREE.Mesh(new THREE.BoxGeometry(1.85, 1.85, 1.85), cubeMaterial);
+    cube.castShadow = true;
+    cube.receiveShadow = false;
+    cube.position.set(0, 0.93, 0);
+    scene.add(cube);
+
+    const contactShadow = new THREE.Mesh(
+      new THREE.CircleGeometry(0.96, 34),
+      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.26 })
+    );
+    contactShadow.rotation.x = -Math.PI / 2;
+    contactShadow.position.set(0, 0.01, 0);
+    scene.add(contactShadow);
+
+    rendererRef.current = renderer;
+    sceneRef.current = scene;
+    cameraRef.current = camera;
+    cubeRef.current = cube;
+    shadowRef.current = contactShadow;
+
+    const animate = (ts: number) => {
+      const r = rendererRef.current;
+      const s = sceneRef.current;
+      const c = cameraRef.current;
+      const cubeMesh = cubeRef.current;
+      const contact = shadowRef.current;
+      if (!r || !s || !c || !cubeMesh || !contact) return;
+
       if (!lastTsRef.current) lastTsRef.current = ts;
       const dt = Math.min(0.033, (ts - lastTsRef.current) / 1000);
       lastTsRef.current = ts;
 
-      const pos = cubePosRef.current;
-      const vel = cubeVelRef.current;
-      const rot = cubeRotRef.current;
-      const ang = cubeAngVelRef.current;
+      const m = motionRef.current;
 
-      pos.x += vel.x * dt;
-      pos.z += vel.z * dt;
+      m.x += m.vx * dt;
+      m.z += m.vz * dt;
 
-      const speed = Math.hypot(vel.x, vel.z);
+      m.vx *= Math.exp(-dt * 3.7);
+      m.vz *= Math.exp(-dt * 3.7);
 
-      vel.x *= Math.exp(-dt * 2.85);
-      vel.z *= Math.exp(-dt * 2.85);
-
-      if (pos.x > ARENA_HALF) {
-        pos.x = ARENA_HALF;
-        vel.x *= -0.38;
-        ang.z += 2.4;
-        playSploosh(0.68);
+      if (m.x > ARENA_HALF) {
+        m.x = ARENA_HALF;
+        m.vx *= -0.35;
+        m.spinZ += 2.5;
+        playSploosh(0.7);
       }
-      if (pos.x < -ARENA_HALF) {
-        pos.x = -ARENA_HALF;
-        vel.x *= -0.38;
-        ang.z -= 2.4;
-        playSploosh(0.68);
+      if (m.x < -ARENA_HALF) {
+        m.x = -ARENA_HALF;
+        m.vx *= -0.35;
+        m.spinZ -= 2.5;
+        playSploosh(0.7);
       }
-      if (pos.z > ARENA_HALF) {
-        pos.z = ARENA_HALF;
-        vel.z *= -0.38;
-        ang.x += 2.4;
-        playSploosh(0.68);
+      if (m.z > ARENA_HALF) {
+        m.z = ARENA_HALF;
+        m.vz *= -0.35;
+        m.spinX += 2.5;
+        playSploosh(0.7);
       }
-      if (pos.z < -ARENA_HALF) {
-        pos.z = -ARENA_HALF;
-        vel.z *= -0.38;
-        ang.x -= 2.4;
-        playSploosh(0.68);
+      if (m.z < -ARENA_HALF) {
+        m.z = -ARENA_HALF;
+        m.vz *= -0.35;
+        m.spinX -= 2.5;
+        playSploosh(0.7);
       }
 
-      ang.x += vel.z * dt * 3.4;
-      ang.z += -vel.x * dt * 3.4;
-      ang.y += (vel.x * 0.22 - vel.z * 0.17) * dt;
+      m.spinX += m.vz * dt * 2.9;
+      m.spinZ += -m.vx * dt * 2.9;
 
-      ang.x *= Math.exp(-dt * 2.05);
-      ang.y *= Math.exp(-dt * 2.45);
-      ang.z *= Math.exp(-dt * 2.05);
+      m.spinX *= Math.exp(-dt * 2.2);
+      m.spinY *= Math.exp(-dt * 2.5);
+      m.spinZ *= Math.exp(-dt * 2.2);
 
-      rot.x += ang.x * dt * 60;
-      rot.y += ang.y * dt * 60;
-      rot.z += ang.z * dt * 60;
+      m.rx += m.spinX * dt;
+      m.ry += m.spinY * dt;
+      m.rz += m.spinZ * dt;
 
-      squishRef.current = lerp(squishRef.current, 1, Math.min(1, dt * 6.4));
-      sparkleRef.current = Math.max(0, sparkleRef.current - dt * 1.1);
+      m.hopVy -= 13.5 * dt;
+      m.hop += m.hopVy * dt;
+      if (m.hop < 0) {
+        if (m.hopVy < -2.8) playSploosh(0.82);
+        m.hop = 0;
+        m.hopVy = 0;
+      }
 
-      cameraYawKickRef.current *= Math.exp(-dt * 3.1);
+      m.squish = lerp(m.squish, 1, Math.min(1, dt * 8));
 
-      // Ambient cream specks while moving
-      if (speed > 0.32 && Math.random() < 0.16) {
-        trailRef.current.push({
-          id: nextTrailIdRef.current++,
-          x: SCREEN_WIDTH / 2 + (Math.random() - 0.5) * 50,
-          y: 520 + (Math.random() - 0.5) * 14,
-          vx: (Math.random() - 0.5) * 1.6,
-          vy: -1 - Math.random() * 1.1,
-          life: 0.26 + Math.random() * 0.3,
-          size: 2 + Math.random() * 3,
-          color: TRAIL_COLORS[Math.floor(Math.random() * TRAIL_COLORS.length)],
+      const speed = Math.hypot(m.vx, m.vz);
+
+      cubeMesh.position.set(m.x, 0.93 + m.hop, m.z);
+      cubeMesh.rotation.set(m.rx, m.ry, m.rz);
+      cubeMesh.scale.set(1 / m.squish, m.squish, 1 / m.squish);
+
+      contact.position.set(m.x, 0.01, m.z);
+      const shScale = 1 + speed * 0.06;
+      contact.scale.set(shScale, shScale, 1);
+      (contact.material as THREE.MeshBasicMaterial).opacity = clamp(0.28 - m.hop * 0.17, 0.08, 0.28);
+
+      const yaw = THREE.MathUtils.degToRad(cameraOrbitRef.current.yaw);
+      const pitch = THREE.MathUtils.degToRad(cameraOrbitRef.current.pitch);
+      const radius = 7.1;
+
+      const cx = m.x + Math.sin(yaw) * Math.cos(pitch) * radius;
+      const cy = 1.2 + Math.sin(pitch) * radius + m.hop * 0.1;
+      const cz = m.z + Math.cos(yaw) * Math.cos(pitch) * radius;
+
+      c.position.set(cx, cy, cz);
+      c.lookAt(m.x, 0.95 + m.hop * 0.7, m.z);
+
+      r.render(s, c);
+      gl.endFrameEXP();
+
+      if (ts - lastHudRef.current > 120) {
+        lastHudRef.current = ts;
+        setHud({
+          speed: speed.toFixed(2),
+          cam: `${Math.round(cameraOrbitRef.current.yaw)}°`,
         });
       }
 
-      const nextTrail: Particle[] = [];
-      for (const p of trailRef.current) {
-        p.x += p.vx * 88 * dt;
-        p.y += p.vy * 88 * dt;
-        p.vy += 3.4 * dt;
-        p.vx *= 0.986;
-        p.life -= dt;
-        if (p.life > 0) nextTrail.push(p);
-      }
-      trailRef.current = nextTrail;
-
-      if (toastRef.current.life > 0) {
-        toastRef.current.life = Math.max(0, toastRef.current.life - dt);
-      }
-
-      forceRender((n) => (n + 1) % 1000000);
-      raf = requestAnimationFrame(tick);
+      rafRef.current = requestAnimationFrame(animate);
     };
 
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, []);
-
-  const pos = cubePosRef.current;
-  const vel = cubeVelRef.current;
-  const rot = cubeRotRef.current;
-
-  const speed = Math.hypot(vel.x, vel.z);
-
-  const cameraYaw = cameraYawRef.current + cameraYawKickRef.current + Math.sin(lastTsRef.current * 0.0012) * 1.7;
-  const cameraPitch = cameraPitchRef.current;
-
-  const yawRad = (cameraYaw * Math.PI) / 180;
-  const pitchRad = (cameraPitch * Math.PI) / 180;
-
-  const camDistance = 6.55;
-  const camX = pos.x - Math.sin(yawRad) * camDistance;
-  const camZ = pos.z - Math.cos(yawRad) * camDistance;
-  const camY = 2.15 + cameraPitch * 0.018;
-
-  const project = (wx: number, wy: number, wz: number) => {
-    const rx = wx - camX;
-    const ry = wy - camY;
-    const rz = wz - camZ;
-
-    const x1 = rx * Math.cos(yawRad) - rz * Math.sin(yawRad);
-    const z1 = rx * Math.sin(yawRad) + rz * Math.cos(yawRad);
-
-    const y2 = ry * Math.cos(pitchRad) - z1 * Math.sin(pitchRad);
-    const z2 = ry * Math.sin(pitchRad) + z1 * Math.cos(pitchRad);
-
-    if (z2 <= 0.22) return null;
-
-    const depth = 1 / (0.86 + z2 * 0.11);
-    const x = SCREEN_WIDTH / 2 + x1 * 164 * depth;
-    const y = SCREEN_HEIGHT * 0.52 - y2 * 42 * depth;
-
-    return { x, y, depth, z2 };
+    rafRef.current = requestAnimationFrame(animate);
   };
 
-  const floorRenders = floorPoints
-    .map((pt) => {
-      const p = project(pt.x, 0, pt.z);
-      if (!p || p.z2 > 120) return null;
-      return { ...pt, p };
-    })
-    .filter((v): v is { x: number; z: number; parity: number; p: NonNullable<ReturnType<typeof project>> } => !!v);
-
-  const cubeProjection = project(pos.x, CUBE_HALF, pos.z);
-  const shadowProjection = project(pos.x, 0.01, pos.z);
-
-  const cubeSize = cubeProjection ? clamp(132 * cubeProjection.depth * 1.56, 78, 170) : 120;
-
-  const polishPulse = 0.52 + 0.48 * Math.sin(lastTsRef.current * 0.0024 + sparkleRef.current * 2.1);
-  const rimGlow = clamp(0.18 + speed * 0.22 + sparkleRef.current * 0.2, 0.18, 0.82);
-
-  const toastOpacity = Math.min(1, toastRef.current.life * 1.45);
+  useEffect(() => {
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+      rendererRef.current = null;
+      sceneRef.current = null;
+      cameraRef.current = null;
+      cubeRef.current = null;
+      shadowRef.current = null;
+    };
+  }, []);
 
   return (
     <View style={styles.gameWrap}>
@@ -591,156 +564,27 @@ function CubeSandbox({ onBack }: { onBack: () => void }) {
         </Pressable>
 
         <View style={styles.hudRight}>
-          <HudChip label="Speed" value={speed.toFixed(2)} />
-          <HudChip label="Cam" value={`${Math.round(cameraYaw)}°`} />
+          <HudChip label="Speed" value={hud.speed} />
+          <HudChip label="Cam" value={hud.cam} />
         </View>
       </View>
 
       <View style={styles.objectiveRow}>
-        <Text style={styles.objective}>Satisfying cream-cheese cube movement and rotation.</Text>
+        <Text style={styles.objective}>Real 3D cube. Swipe to move, rotate, and burst.</Text>
       </View>
 
-      <View style={styles.world} {...panResponder.panHandlers}>
-        <View style={styles.skyGlowA} />
-        <View style={styles.skyGlowB} />
-        <View style={styles.vignetteTop} />
+      <View style={styles.world}>
+        <GLView style={StyleSheet.absoluteFill} onContextCreate={onContextCreate} />
 
-        {floorRenders.map((tile, idx) => {
-          const size = clamp(18 * tile.p.depth, 2.2, 24);
-          return (
-            <View
-              key={`f-${idx}`}
-              style={[
-                styles.floorDot,
-                {
-                  left: tile.p.x - size / 2,
-                  top: tile.p.y - size / 2,
-                  width: size,
-                  height: size,
-                  borderRadius: size * 0.28,
-                  backgroundColor: tile.parity ? 'rgba(193,210,234,0.25)' : 'rgba(157,181,217,0.19)',
-                  borderColor: tile.parity ? 'rgba(222,236,255,0.2)' : 'rgba(174,199,236,0.16)',
-                  opacity: 0.24 + tile.p.depth * 0.6,
-                },
-              ]}
-            />
-          );
-        })}
-
-        {shadowProjection && (
-          <View
-            style={[
-              styles.playerShadow,
-              {
-                left: shadowProjection.x - cubeSize * 0.35,
-                top: shadowProjection.y + cubeSize * 0.34,
-                width: cubeSize * 0.7,
-                height: cubeSize * 0.22,
-                borderRadius: cubeSize,
-                opacity: 0.2 + polishPulse * 0.14,
-              },
-            ]}
-          />
-        )}
-
-        {cubeProjection && (
-          <View
-            style={[
-              styles.playerBody,
-              {
-                left: cubeProjection.x - cubeSize / 2,
-                top: cubeProjection.y - cubeSize * 0.92,
-                width: cubeSize,
-                height: cubeSize,
-                shadowOpacity: clamp(0.2 + rimGlow * 0.6, 0.2, 0.75),
-                transform: [
-                  { perspective: 920 },
-                  { rotateY: `${rot.y}deg` },
-                  { rotateX: `${rot.x}deg` },
-                  { rotateZ: `${rot.z}deg` },
-                  { scaleX: 1 / squishRef.current },
-                  { scaleY: squishRef.current },
-                ],
-              },
-            ]}
-          >
-            <View
-              style={[
-                styles.playerTopFace,
-                {
-                  left: cubeSize * 0.08,
-                  top: -cubeSize * 0.16,
-                  width: cubeSize * 0.84,
-                  height: cubeSize * 0.18,
-                  borderTopLeftRadius: 12 * (cubeSize / 96),
-                  borderTopRightRadius: 12 * (cubeSize / 96),
-                  opacity: 0.84,
-                },
-              ]}
-            />
-            <View
-              style={[
-                styles.playerSideFace,
-                {
-                  right: -cubeSize * 0.16,
-                  top: cubeSize * 0.06,
-                  width: cubeSize * 0.18,
-                  height: cubeSize * 0.84,
-                  borderTopRightRadius: 10 * (cubeSize / 96),
-                  borderBottomRightRadius: 10 * (cubeSize / 96),
-                  opacity: 0.9,
-                },
-              ]}
-            />
-
-            <View
-              style={[
-                styles.playerFrontFace,
-                {
-                  width: cubeSize,
-                  height: cubeSize,
-                  borderRadius: 14 * (cubeSize / 96),
-                  borderColor: `rgba(255, 238, 194, ${0.52 + rimGlow * 0.4})`,
-                },
-              ]}
-            >
-              <View style={[styles.playerTopGloss, { opacity: 0.62 + polishPulse * 0.25 }]} />
-              <View style={styles.playerSpecular} />
-              <View style={styles.playerFaceDark} />
-              <View style={styles.playerMarbleA} />
-              <View style={styles.playerMarbleB} />
-              <View style={[styles.playerRim, { opacity: 0.28 + rimGlow * 0.42 }]} />
-            </View>
-          </View>
-        )}
-
-        {trailRef.current.map((particle) => (
-          <View
-            key={`trail-${particle.id}`}
-            style={[
-              styles.trail,
-              {
-                left: particle.x - particle.size / 2,
-                top: particle.y - particle.size / 2,
-                width: particle.size,
-                height: particle.size,
-                backgroundColor: particle.color,
-                opacity: Math.max(0, particle.life * 1.6),
-              },
-            ]}
-          />
-        ))}
-
-        <View style={styles.tutorialWrap}>
-          <Text style={styles.tutorialText}>Phone: left-zone swipe to shove · right-zone swipe to orbit camera</Text>
-          <Text style={styles.tutorialText}>Desktop: A/D shove · W/S camera pitch · Space forward burst</Text>
+        <View style={styles.touchOverlay} {...panResponder.panHandlers}>
+          <View style={styles.moveZoneHint} />
+          <View style={styles.cameraZoneHint} />
         </View>
 
-        {toastRef.current.life > 0 && (
-          <View style={[styles.toast, { opacity: toastOpacity, transform: [{ translateY: (1 - toastOpacity) * 12 }] }]}>
-            <Text style={styles.toastText}>{toastRef.current.text}</Text>
-          </View>
-        )}
+        <View style={styles.tutorialWrap}>
+          <Text style={styles.tutorialText}>Phone: left swipe = move • right swipe = camera orbit</Text>
+          <Text style={styles.tutorialText}>Desktop: W/A/S/D move • Space burst • arrows camera</Text>
+        </View>
       </View>
     </View>
   );
@@ -825,15 +669,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 2,
     gap: 8,
   },
-  objectiveRow: {
-    marginBottom: 6,
-    paddingHorizontal: 2,
-  },
-  objective: {
-    color: '#d5e9ff',
-    fontWeight: '800',
-    letterSpacing: 0.25,
-  },
+  objectiveRow: { marginBottom: 6, paddingHorizontal: 2 },
+  objective: { color: '#d5e9ff', fontWeight: '800', letterSpacing: 0.25 },
   smallButton: {
     backgroundColor: '#12213a',
     borderWidth: 1,
@@ -843,11 +680,7 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
   },
   smallButtonText: { color: '#d6e6ff', fontWeight: '700' },
-  hudRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
+  hudRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   hudChip: {
     backgroundColor: '#12213a',
     borderWidth: 1,
@@ -872,137 +705,35 @@ const styles = StyleSheet.create({
   world: {
     flex: 1,
     borderRadius: 14,
-    backgroundColor: '#0f1e3a',
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: '#1f3258',
+    backgroundColor: '#0e1c38',
   },
-  skyGlowA: {
-    position: 'absolute',
-    left: -120,
-    top: -150,
-    width: 770,
-    height: 420,
-    borderRadius: 390,
-    backgroundColor: '#193a6f',
-    opacity: 0.46,
+  touchOverlay: {
+    ...StyleSheet.absoluteFillObject,
   },
-  skyGlowB: {
-    position: 'absolute',
-    right: -170,
-    top: -130,
-    width: 530,
-    height: 320,
-    borderRadius: 260,
-    backgroundColor: '#153764',
-    opacity: 0.32,
-  },
-  vignetteTop: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    height: 136,
-    backgroundColor: 'rgba(2,8,18,0.16)',
-  },
-
-  floorDot: {
-    position: 'absolute',
-    borderWidth: 1,
-  },
-
-  playerShadow: {
-    position: 'absolute',
-    backgroundColor: '#03070f',
-  },
-  playerBody: {
-    position: 'absolute',
-    overflow: 'visible',
-    shadowColor: '#ffe8b0',
-    shadowOffset: { width: 0, height: 0 },
-    shadowRadius: 22,
-  },
-  playerFrontFace: {
+  moveZoneHint: {
     position: 'absolute',
     left: 0,
     top: 0,
-    backgroundColor: '#f5efe0',
-    borderWidth: 2,
-    overflow: 'hidden',
+    bottom: 0,
+    width: '52%',
+    backgroundColor: 'rgba(255,255,255,0.01)',
   },
-  playerTopFace: {
-    position: 'absolute',
-    backgroundColor: '#fff8e8',
-    borderWidth: 1,
-    borderColor: '#f9eccd',
-    transform: [{ skewX: '-34deg' }],
-  },
-  playerSideFace: {
-    position: 'absolute',
-    backgroundColor: '#d9c5a4',
-    borderWidth: 1,
-    borderColor: '#c9b08e',
-    transform: [{ skewY: '-34deg' }],
-  },
-  playerTopGloss: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: '42%',
-    backgroundColor: '#fff9ee',
-  },
-  playerSpecular: {
-    position: 'absolute',
-    left: '12%',
-    top: '11%',
-    width: '34%',
-    height: '15%',
-    borderRadius: 99,
-    backgroundColor: 'rgba(255,255,255,0.45)',
-  },
-  playerFaceDark: {
+  cameraZoneHint: {
     position: 'absolute',
     right: 0,
     top: 0,
     bottom: 0,
-    width: '18%',
-    backgroundColor: '#e5d5bc',
+    width: '48%',
+    backgroundColor: 'rgba(255,255,255,0.01)',
   },
-  playerMarbleA: {
-    position: 'absolute',
-    left: '16%',
-    top: '36%',
-    width: '22%',
-    height: '9%',
-    borderRadius: 10,
-    backgroundColor: 'rgba(228,201,157,0.55)',
-  },
-  playerMarbleB: {
-    position: 'absolute',
-    left: '37%',
-    top: '56%',
-    width: '18%',
-    height: '8%',
-    borderRadius: 10,
-    backgroundColor: 'rgba(228,201,157,0.42)',
-  },
-  playerRim: {
-    ...StyleSheet.absoluteFillObject,
-    borderWidth: 2,
-    borderColor: '#fff2cf',
-  },
-
-  trail: {
-    position: 'absolute',
-    borderRadius: 999,
-  },
-
   tutorialWrap: {
     position: 'absolute',
     top: 12,
     alignSelf: 'center',
-    backgroundColor: 'rgba(4,10,20,0.68)',
+    backgroundColor: 'rgba(4,10,20,0.66)',
     borderWidth: 1,
     borderColor: 'rgba(125,164,212,0.35)',
     borderRadius: 10,
@@ -1013,24 +744,6 @@ const styles = StyleSheet.create({
   tutorialText: {
     color: '#d6e9ff',
     fontWeight: '700',
-    fontSize: 12,
-  },
-
-  toast: {
-    position: 'absolute',
-    top: 72,
-    alignSelf: 'center',
-    backgroundColor: 'rgba(8,19,36,0.86)',
-    borderWidth: 1,
-    borderColor: '#3e67a0',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  toastText: {
-    color: '#d9ecff',
-    fontWeight: '800',
-    letterSpacing: 0.2,
     fontSize: 12,
   },
 });
