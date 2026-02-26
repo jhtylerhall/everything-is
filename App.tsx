@@ -42,7 +42,7 @@ type Gate = {
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-const BUILD_TAG = 'world-align-6';
+const BUILD_TAG = 'world-align-7';
 
 const FLOOR_Y = 0.01;
 const ARENA_HALF = 14.5;
@@ -745,9 +745,9 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         gateDoorRefs.current[gate.id] = door;
       }
 
-      // Marker now matches cream-cheese footprint exactly for clear intended alignment.
-      const footprintX = gate.triggerAxis === 'x' ? BLOCK_SIZE.x : BLOCK_SIZE.z;
-      const footprintZ = gate.triggerAxis === 'x' ? BLOCK_SIZE.z : BLOCK_SIZE.x;
+      // Marker matches required block footprint (orientation only; either facing direction is valid).
+      const footprintX = gate.triggerAxis === 'x' ? BLOCK_SIZE.z : BLOCK_SIZE.x;
+      const footprintZ = gate.triggerAxis === 'x' ? BLOCK_SIZE.x : BLOCK_SIZE.z;
 
       const triggerBase = new THREE.Mesh(
         new THREE.BoxGeometry(footprintX, 0.08, footprintZ),
@@ -756,7 +756,6 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       triggerBase.position.set(gate.triggerX, FLOOR_Y + 0.04, gate.triggerZ);
       triggerBase.castShadow = false;
       triggerBase.receiveShadow = true;
-      scene.add(triggerBase);
 
       const triggerOutline = new THREE.Mesh(
         new THREE.BoxGeometry(footprintX + 0.12, 0.03, footprintZ + 0.12),
@@ -765,22 +764,24 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       triggerOutline.position.set(gate.triggerX, FLOOR_Y + 0.095, gate.triggerZ);
       triggerOutline.castShadow = false;
       triggerOutline.receiveShadow = true;
-      scene.add(triggerOutline);
 
-      // Arrow cue to indicate required long-axis direction.
-      const arrow = new THREE.Mesh(
-        new THREE.ConeGeometry(0.16, 0.34, 4),
+      // Axis stripe (no arrowhead) to avoid implying a required front-facing direction.
+      const axisStripe = new THREE.Mesh(
+        new THREE.BoxGeometry(
+          gate.triggerAxis === 'x' ? footprintX * 0.88 : 0.18,
+          0.035,
+          gate.triggerAxis === 'z' ? footprintZ * 0.88 : 0.18
+        ),
         triggerOutlineMat.clone()
       );
-      arrow.position.set(gate.triggerX, FLOOR_Y + 0.2, gate.triggerZ);
-      arrow.rotation.x = -Math.PI / 2;
-      arrow.rotation.z = gate.triggerAxis === 'x' ? -Math.PI / 2 : 0;
-      scene.add(arrow);
+      axisStripe.position.set(gate.triggerX, FLOOR_Y + 0.13, gate.triggerZ);
+      axisStripe.castShadow = false;
+      axisStripe.receiveShadow = true;
 
       const triggerGroup = new THREE.Group();
       triggerGroup.add(triggerBase);
       triggerGroup.add(triggerOutline);
-      triggerGroup.add(arrow);
+      triggerGroup.add(axisStripe);
       scene.add(triggerGroup);
       gateTriggerRefs.current[gate.id] = triggerGroup;
     }
@@ -937,7 +938,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
             playSploosh(0.95);
           } else {
             showToast(
-              `${gate.id.toUpperCase()} needs Axis ${gate.triggerAxis.toUpperCase()} + low profile`
+              `${gate.id.toUpperCase()}: match marker shape + stay low (front can face either way)`
             );
           }
         }
@@ -1077,7 +1078,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         <View style={styles.tutorialWrap}>
           <Text style={styles.tutorialText}>Phone: swipe up rolls down • swipe down rolls up • right side orbits camera</Text>
           <Text style={styles.tutorialText}>Desktop: A/D side roll • W back • S/Space forward • arrows camera</Text>
-          <Text style={styles.tutorialText}>Orange stamp + arrow = front of cream cheese block.</Text>
+          <Text style={styles.tutorialText}>Orange stamp + arrow = front of cream cheese block (for your reference).</Text>
+          <Text style={styles.tutorialText}>Gate checks marker shape alignment only; front can face either direction.</Text>
           <Text style={styles.tutorialText}>Marker footprint matches block size; snap onto it with right orientation to unlock.</Text>
           <Text style={styles.tutorialText}>Buildings are hard boundaries at the world edge.</Text>
         </View>
