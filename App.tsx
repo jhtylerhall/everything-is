@@ -33,12 +33,16 @@ type Gate = {
   gapCenter: number;
   gapWidth: number;
   clearance: number;
+  triggerX: number;
+  triggerZ: number;
+  triggerAxis: 'x' | 'z';
+  triggerMaxHalfY: number;
   tip: string;
 };
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-const BUILD_TAG = 'world-align-1';
+const BUILD_TAG = 'world-align-2';
 
 const FLOOR_Y = 0.01;
 const ARENA_HALF = 14.5;
@@ -60,7 +64,11 @@ const GATES: Gate[] = [
     gapCenter: 0,
     gapWidth: 2.2,
     clearance: 1.18,
-    tip: 'Low gate: stay on a flat face.',
+    triggerX: -1.9,
+    triggerZ: -1.3,
+    triggerAxis: 'z',
+    triggerMaxHalfY: 0.52,
+    tip: 'Align to the floor marker to open Gate 1.',
   },
   {
     id: 'gate-2',
@@ -69,7 +77,11 @@ const GATES: Gate[] = [
     gapCenter: 2.8,
     gapWidth: 1.34,
     clearance: 1.85,
-    tip: 'Narrow gate: align your width first.',
+    triggerX: 1.2,
+    triggerZ: -6.2,
+    triggerAxis: 'x',
+    triggerMaxHalfY: 0.8,
+    tip: 'Align long-side X on the marker to open Gate 2.',
   },
   {
     id: 'gate-3',
@@ -78,7 +90,11 @@ const GATES: Gate[] = [
     gapCenter: -12.2,
     gapWidth: 1.55,
     clearance: 1.32,
-    tip: 'Final gate: roll to fit both width and height.',
+    triggerX: 2.2,
+    triggerZ: -10.8,
+    triggerAxis: 'z',
+    triggerMaxHalfY: 0.65,
+    tip: 'Final marker: align cleanly to unlock the phone lane.',
   },
 ];
 
@@ -300,7 +316,7 @@ function MainMenu({ onStart }: { onStart: () => void }) {
       <Text style={styles.kicker}>JOSH BLOCK: HEADSPACE</Text>
       <Text style={styles.title}>Cream Cheese Open World</Text>
       <Text style={styles.copyCenter}>Navigate inside Josh Block's mind-city and become a phone.</Text>
-      <Text style={styles.copyCenter}>Face-roll through alignment gates; city buildings mark hard boundaries.</Text>
+      <Text style={styles.copyCenter}>Align on floor markers to unlock gates. City buildings mark hard boundaries.</Text>
 
       <Pressable style={styles.menuButtonPrimary} onPress={onStart}>
         <Text style={styles.menuButtonPrimaryText}>Start Run</Text>
@@ -315,6 +331,9 @@ function CubeLab({ onBack }: { onBack: () => void }) {
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const blockRef = useRef<THREE.Mesh | null>(null);
   const shadowRef = useRef<THREE.Mesh | null>(null);
+  const gateDoorRefs = useRef<Record<string, THREE.Mesh>>({});
+  const gateTriggerRefs = useRef<Record<string, THREE.Mesh>>({});
+  const activatedGatesRef = useRef<Set<string>>(new Set());
   const rafRef = useRef<number | null>(null);
 
   const blockStateRef = useRef({
@@ -377,6 +396,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
     }
 
     for (const gate of GATES) {
+      if (activatedGatesRef.current.has(gate.id)) continue;
+
       const intersectsWall =
         gate.axis === 'z'
           ? Math.abs(testPos.z - gate.at) <= GATE_THICKNESS * 0.5 + ext.z
@@ -384,18 +405,9 @@ function CubeLab({ onBack }: { onBack: () => void }) {
 
       if (!intersectsWall) continue;
 
-      const gapFit =
-        gate.axis === 'z'
-          ? Math.abs(testPos.x - gate.gapCenter) + ext.x <= gate.gapWidth * 0.5
-          : Math.abs(testPos.z - gate.gapCenter) + ext.z <= gate.gapWidth * 0.5;
-
-      const heightFit = testPos.y + ext.y <= gate.clearance;
-
-      if (!gapFit || !heightFit) {
-        showToast(gate.tip);
-        playSploosh(0.58);
-        return;
-      }
+      showToast(gate.tip);
+      playSploosh(0.58);
+      return;
     }
 
     rollRef.current = {
@@ -615,9 +627,15 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       scene.add(bB);
     }
 
-    // Alignment puzzle gates (opening + low clearance beam).
+    // Alignment puzzle gates + floor indicators that unlock each gate.
     const gateMat = new THREE.MeshStandardMaterial({ color: 0x7f8ca0, roughness: 0.88 });
     const gateBeamMat = new THREE.MeshStandardMaterial({ color: 0xb99963, roughness: 0.66 });
+    const gateDoorMat = new THREE.MeshStandardMaterial({ color: 0x4d5f7a, roughness: 0.82 });
+    const triggerInactiveMat = new THREE.MeshStandardMaterial({ color: 0x6f5a39, roughness: 0.65 });
+
+    gateDoorRefs.current = {};
+    gateTriggerRefs.current = {};
+    activatedGatesRef.current = new Set();
 
     for (const gate of GATES) {
       const halfWorld = ARENA_HALF;
@@ -659,6 +677,16 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         beam.castShadow = true;
         beam.receiveShadow = true;
         scene.add(beam);
+
+        const door = new THREE.Mesh(
+          new THREE.BoxGeometry(gate.gapWidth, gate.clearance, GATE_THICKNESS * 0.94),
+          gateDoorMat
+        );
+        door.position.set(gate.gapCenter, gate.clearance * 0.5, gate.at);
+        door.castShadow = true;
+        door.receiveShadow = true;
+        scene.add(door);
+        gateDoorRefs.current[gate.id] = door;
       } else {
         const gapMin = gate.gapCenter - gate.gapWidth * 0.5;
         const gapMax = gate.gapCenter + gate.gapWidth * 0.5;
@@ -696,7 +724,31 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         beam.castShadow = true;
         beam.receiveShadow = true;
         scene.add(beam);
+
+        const door = new THREE.Mesh(
+          new THREE.BoxGeometry(GATE_THICKNESS * 0.94, gate.clearance, gate.gapWidth),
+          gateDoorMat
+        );
+        door.position.set(gate.at, gate.clearance * 0.5, gate.gapCenter);
+        door.castShadow = true;
+        door.receiveShadow = true;
+        scene.add(door);
+        gateDoorRefs.current[gate.id] = door;
       }
+
+      const trigger = new THREE.Mesh(
+        new THREE.BoxGeometry(
+          gate.triggerAxis === 'x' ? 1.55 : 0.95,
+          0.08,
+          gate.triggerAxis === 'z' ? 1.55 : 0.95
+        ),
+        triggerInactiveMat.clone()
+      );
+      trigger.position.set(gate.triggerX, FLOOR_Y + 0.04, gate.triggerZ);
+      trigger.castShadow = false;
+      trigger.receiveShadow = true;
+      scene.add(trigger);
+      gateTriggerRefs.current[gate.id] = trigger;
     }
 
     // Phone destination marker in world.
@@ -783,6 +835,40 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         }
       }
 
+      if (!rollRef.current) {
+        const ext = blockHalfExtents(stateNow.quat);
+        const horizontalAxis: 'x' | 'z' = ext.x >= ext.z ? 'x' : 'z';
+
+        for (const gate of GATES) {
+          if (activatedGatesRef.current.has(gate.id)) continue;
+
+          const onMarker =
+            Math.abs(stateNow.pos.x - gate.triggerX) <= 0.44 &&
+            Math.abs(stateNow.pos.z - gate.triggerZ) <= 0.44;
+          if (!onMarker) continue;
+
+          const orientationOk = horizontalAxis === gate.triggerAxis;
+          const heightOk = ext.y <= gate.triggerMaxHalfY;
+
+          if (orientationOk && heightOk) {
+            activatedGatesRef.current.add(gate.id);
+
+            const door = gateDoorRefs.current[gate.id];
+            if (door) door.visible = false;
+
+            const trigger = gateTriggerRefs.current[gate.id];
+            if (trigger) {
+              (trigger.material as THREE.MeshStandardMaterial).color.setHex(0x3fbf78);
+              (trigger.material as THREE.MeshStandardMaterial).emissive = new THREE.Color(0x1e7a4a);
+              (trigger.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.45;
+            }
+
+            showToast(`${gate.id.toUpperCase()} unlocked`);
+            playSploosh(0.95);
+          }
+        }
+      }
+
       cubeMesh.position.copy(stateNow.pos);
       cubeMesh.quaternion.copy(stateNow.quat);
 
@@ -866,6 +952,9 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       cameraRef.current = null;
       blockRef.current = null;
       shadowRef.current = null;
+      gateDoorRefs.current = {};
+      gateTriggerRefs.current = {};
+      activatedGatesRef.current = new Set();
     };
   }, []);
 
@@ -883,7 +972,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       </View>
 
       <View style={styles.objectiveRow}>
-        <Text style={styles.objective}>Josh Block headspace: solve alignment gates, reach the phone. ({BUILD_TAG})</Text>
+        <Text style={styles.objective}>Josh Block headspace: align on floor markers to unlock gates, reach the phone. ({BUILD_TAG})</Text>
       </View>
 
       <View style={styles.world}>
@@ -897,7 +986,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         <View style={styles.tutorialWrap}>
           <Text style={styles.tutorialText}>Phone: swipe up rolls down • swipe down rolls up • right side orbits camera</Text>
           <Text style={styles.tutorialText}>Desktop: A/D side roll • W back • S/Space forward • arrows camera</Text>
-          <Text style={styles.tutorialText}>Buildings are hard boundaries. Gates require correct block alignment.</Text>
+          <Text style={styles.tutorialText}>Step on floor markers with correct orientation to unlock each gate.</Text>
+          <Text style={styles.tutorialText}>Buildings are hard boundaries at the world edge.</Text>
         </View>
 
         {toast.length > 0 && (
