@@ -25,7 +25,7 @@ type Particle = {
   color: string;
 };
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 const ARENA_HALF = 8.2;
 const CUBE_HALF = 0.86;
@@ -502,10 +502,10 @@ function CubeSandbox({ onBack }: { onBack: () => void }) {
   const yawRad = (cameraYaw * Math.PI) / 180;
   const pitchRad = (cameraPitch * Math.PI) / 180;
 
-  const camDistance = 7.4;
+  const camDistance = 6.55;
   const camX = pos.x - Math.sin(yawRad) * camDistance;
   const camZ = pos.z - Math.cos(yawRad) * camDistance;
-  const camY = 3.2 + cameraPitch * 0.03;
+  const camY = 2.15 + cameraPitch * 0.018;
 
   const project = (wx: number, wy: number, wz: number) => {
     const rx = wx - camX;
@@ -520,9 +520,9 @@ function CubeSandbox({ onBack }: { onBack: () => void }) {
 
     if (z2 <= 0.22) return null;
 
-    const depth = 1 / (0.76 + z2 * 0.098);
-    const x = SCREEN_WIDTH / 2 + x1 * 190 * depth;
-    const y = 386 - y2 * 108 * depth;
+    const depth = 1 / (0.86 + z2 * 0.11);
+    const x = SCREEN_WIDTH / 2 + x1 * 164 * depth;
+    const y = SCREEN_HEIGHT * 0.52 - y2 * 42 * depth;
 
     return { x, y, depth, z2 };
   };
@@ -556,7 +556,6 @@ function CubeSandbox({ onBack }: { onBack: () => void }) {
         <View style={styles.hudRight}>
           <HudChip label="Speed" value={speed.toFixed(2)} />
           <HudChip label="Cam" value={`${Math.round(cameraYaw)}°`} />
-          <HudChip label="Polish" value={`${Math.round((0.5 + rimGlow) * 100)}%`} />
         </View>
       </View>
 
