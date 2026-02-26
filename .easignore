@@ -1,0 +1,19 @@
+# Keep EAS uploads lean
+.git
+.expo
+node_modules
+
+# Local artifacts / recordings
+recordings/
+*.webm
+*.mp4
+
+# Generated proof screenshots/videos
+cube-runner-*.png
+gameplay-*.png
+physics-exploration-proof*.png
+pitch-run*.mp4
+pitch-run*.webm
+platform-material-proof*.png
+polish-pass-proof*.png
+running-proof*.png
