@@ -42,11 +42,12 @@ type Gate = {
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-const BUILD_TAG = 'world-align-3';
+const BUILD_TAG = 'world-align-4';
 
 const FLOOR_Y = 0.01;
 const ARENA_HALF = 14.5;
 const GRID_STEP = 0.5;
+const MARKER_SNAP_RADIUS = 0.78;
 const BOUNDARY_MARGIN = 0.5;
 const GATE_THICKNESS = 0.8;
 const GATE_HEIGHT = 3.4;
@@ -851,10 +852,16 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         for (const gate of GATES) {
           if (activatedGatesRef.current.has(gate.id)) continue;
 
-          const onMarker =
-            Math.abs(stateNow.pos.x - gate.triggerX) <= GRID_STEP * 0.26 &&
-            Math.abs(stateNow.pos.z - gate.triggerZ) <= GRID_STEP * 0.26;
-          if (!onMarker) continue;
+          const dx = stateNow.pos.x - gate.triggerX;
+          const dz = stateNow.pos.z - gate.triggerZ;
+          const markerDist = Math.hypot(dx, dz);
+
+          if (markerDist > MARKER_SNAP_RADIUS) continue;
+
+          // Snap to exact marker tile once close, so puzzle is tile-exact and not finicky.
+          stateNow.pos.x = gate.triggerX;
+          stateNow.pos.z = gate.triggerZ;
+          stateNow.pos.y = restingCenterY(stateNow.quat);
 
           const orientationOk = horizontalAxis === gate.triggerAxis;
           const heightOk = ext.y <= gate.triggerMaxHalfY;
@@ -997,7 +1004,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         <View style={styles.tutorialWrap}>
           <Text style={styles.tutorialText}>Phone: swipe up rolls down • swipe down rolls up • right side orbits camera</Text>
           <Text style={styles.tutorialText}>Desktop: A/D side roll • W back • S/Space forward • arrows camera</Text>
-          <Text style={styles.tutorialText}>Step on floor markers with correct orientation to unlock each gate.</Text>
+          <Text style={styles.tutorialText}>Get near a marker and it snaps to tile-center; correct orientation unlocks gate.</Text>
           <Text style={styles.tutorialText}>Buildings are hard boundaries at the world edge.</Text>
         </View>
 
