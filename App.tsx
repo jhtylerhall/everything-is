@@ -6,7 +6,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Dimensions,
   PanResponder,
-  PixelRatio,
   Platform,
   Pressable,
   SafeAreaView,
@@ -39,7 +38,7 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const ARENA_HALF = 8.6;
 const IMPULSE_BASE = 6.8;
 const CUBE_SIZE = 1.65;
-const BUILD_TAG = 'ix-fix-1';
+const BUILD_TAG = 'ix-fix-2';
 
 let splooshAudioContext: any = null;
 let splooshSound: Audio.Sound | null = null;
@@ -361,7 +360,6 @@ function CubeLab({ onBack }: { onBack: () => void }) {
 
     const renderer = new Renderer({ gl }) as any;
     renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
-    renderer.setPixelRatio(Math.min(2, PixelRatio.get()));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -573,14 +571,23 @@ function CubeLab({ onBack }: { onBack: () => void }) {
           boundRadius / Math.tan(Math.max(0.2, hFov / 2))
         ) * 1.4;
 
-      const radius = Math.max(8.8 + speed * 0.12, fitDistance);
+      const radius = Math.max(9.6 + speed * 0.14, fitDistance * 1.08);
 
       const cx = cameraFollow.x + Math.sin(yaw) * Math.cos(pitch) * radius;
       const cy = Math.max(2.5, cameraFollow.y + 1.55 + Math.sin(pitch) * radius * 0.78);
       const cz = cameraFollow.z + Math.cos(yaw) * Math.cos(pitch) * radius;
 
       c.position.set(cx, cy, cz);
-      c.lookAt(cameraFollow.x, cameraFollow.y + 0.08, cameraFollow.z);
+      c.lookAt(cameraFollow.x, cameraFollow.y, cameraFollow.z);
+
+      const drawW = gl.drawingBufferWidth;
+      const drawH = gl.drawingBufferHeight;
+      const nextAspect = drawW / drawH;
+      if (Math.abs(c.aspect - nextAspect) > 0.0001) {
+        c.aspect = nextAspect;
+        c.updateProjectionMatrix();
+      }
+      r.setViewport(0, 0, drawW, drawH);
 
       r.render(s, c);
       gl.endFrameEXP();
