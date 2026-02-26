@@ -28,7 +28,7 @@ type RollAnim = {
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-const BUILD_TAG = 'roll-rect-2';
+const BUILD_TAG = 'roll-rect-3';
 
 const FLOOR_Y = 0.01;
 const ARENA_HALF = 9.8;
@@ -173,6 +173,56 @@ function restingCenterY(q: THREE.Quaternion) {
   return FLOOR_Y + supportRadius(q, new THREE.Vector3(0, 1, 0));
 }
 
+function quantizeToCardinalXZ(v: THREE.Vector3) {
+  const d = v.clone().setY(0);
+  if (d.lengthSq() < 1e-6) return new THREE.Vector3(1, 0, 0);
+
+  if (Math.abs(d.x) >= Math.abs(d.z)) {
+    return new THREE.Vector3(Math.sign(d.x) || 1, 0, 0);
+  }
+  return new THREE.Vector3(0, 0, Math.sign(d.z) || 1);
+}
+
+function buildOrthogonalQuats() {
+  const out: THREE.Quaternion[] = [new THREE.Quaternion()];
+  const queue: THREE.Quaternion[] = [out[0].clone()];
+
+  const steps = [
+    new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2),
+    new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2),
+    new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2),
+  ];
+
+  while (queue.length) {
+    const current = queue.shift()!;
+    for (const step of steps) {
+      const next = current.clone().multiply(step).normalize();
+      const exists = out.some((q) => Math.abs(q.dot(next)) > 0.9999);
+      if (!exists) {
+        out.push(next.clone());
+        queue.push(next);
+      }
+    }
+  }
+
+  return out;
+}
+
+const ORTHO_QUATS = buildOrthogonalQuats();
+
+function snapToOrthogonalQuat(q: THREE.Quaternion) {
+  let best = ORTHO_QUATS[0];
+  let bestDot = -1;
+  for (const candidate of ORTHO_QUATS) {
+    const d = Math.abs(candidate.dot(q));
+    if (d > bestDot) {
+      bestDot = d;
+      best = candidate;
+    }
+  }
+  return best.clone();
+}
+
 export default function App() {
   const [screen, setScreen] = useState<Screen>('menu');
 
@@ -232,9 +282,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
   const tryRoll = useCallback((dirWorld: THREE.Vector3) => {
     if (rollRef.current) return;
 
-    const d = dirWorld.clone().setY(0);
-    if (d.lengthSq() < 1e-5) return;
-    d.normalize();
+    const d = quantizeToCardinalXZ(dirWorld);
 
     const state = blockStateRef.current;
     const q0 = state.quat.clone();
@@ -478,6 +526,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         stateNow.quat.copy(qDelta).multiply(roll.fromQuat).normalize();
 
         if (t >= 1) {
+          stateNow.quat.copy(snapToOrthogonalQuat(stateNow.quat));
           stateNow.pos.y = restingCenterY(stateNow.quat);
           stateNow.pos.x = clamp(stateNow.pos.x, -ARENA_HALF, ARENA_HALF);
           stateNow.pos.z = clamp(stateNow.pos.z, -ARENA_HALF, ARENA_HALF);
