@@ -652,8 +652,6 @@ function CubeSandbox({ onBack }: { onBack: () => void }) {
                 top: cubeProjection.y - cubeSize * 0.92,
                 width: cubeSize,
                 height: cubeSize,
-                borderRadius: 16 * (cubeSize / 96),
-                borderColor: `rgba(255, 238, 194, ${0.52 + rimGlow * 0.4})`,
                 shadowOpacity: clamp(0.2 + rimGlow * 0.6, 0.2, 0.75),
                 transform: [
                   { perspective: 920 },
@@ -666,12 +664,53 @@ function CubeSandbox({ onBack }: { onBack: () => void }) {
               },
             ]}
           >
-            <View style={[styles.playerTopGloss, { opacity: 0.62 + polishPulse * 0.25 }]} />
-            <View style={styles.playerSpecular} />
-            <View style={styles.playerFaceDark} />
-            <View style={styles.playerMarbleA} />
-            <View style={styles.playerMarbleB} />
-            <View style={[styles.playerRim, { opacity: 0.28 + rimGlow * 0.42 }]} />
+            <View
+              style={[
+                styles.playerTopFace,
+                {
+                  left: cubeSize * 0.08,
+                  top: -cubeSize * 0.16,
+                  width: cubeSize * 0.84,
+                  height: cubeSize * 0.18,
+                  borderTopLeftRadius: 12 * (cubeSize / 96),
+                  borderTopRightRadius: 12 * (cubeSize / 96),
+                  opacity: 0.84,
+                },
+              ]}
+            />
+            <View
+              style={[
+                styles.playerSideFace,
+                {
+                  right: -cubeSize * 0.16,
+                  top: cubeSize * 0.06,
+                  width: cubeSize * 0.18,
+                  height: cubeSize * 0.84,
+                  borderTopRightRadius: 10 * (cubeSize / 96),
+                  borderBottomRightRadius: 10 * (cubeSize / 96),
+                  opacity: 0.9,
+                },
+              ]}
+            />
+
+            <View
+              style={[
+                styles.playerFrontFace,
+                {
+                  width: cubeSize,
+                  height: cubeSize,
+                  borderRadius: 14 * (cubeSize / 96),
+                  borderColor: `rgba(255, 238, 194, ${0.52 + rimGlow * 0.4})`,
+                },
+              ]}
+            >
+              <View style={[styles.playerTopGloss, { opacity: 0.62 + polishPulse * 0.25 }]} />
+              <View style={styles.playerSpecular} />
+              <View style={styles.playerFaceDark} />
+              <View style={styles.playerMarbleA} />
+              <View style={styles.playerMarbleB} />
+              <View style={[styles.playerRim, { opacity: 0.28 + rimGlow * 0.42 }]} />
+            </View>
           </View>
         )}
 
@@ -878,12 +917,32 @@ const styles = StyleSheet.create({
   },
   playerBody: {
     position: 'absolute',
-    backgroundColor: '#f5efe0',
-    borderWidth: 2,
-    overflow: 'hidden',
+    overflow: 'visible',
     shadowColor: '#ffe8b0',
     shadowOffset: { width: 0, height: 0 },
     shadowRadius: 22,
+  },
+  playerFrontFace: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    backgroundColor: '#f5efe0',
+    borderWidth: 2,
+    overflow: 'hidden',
+  },
+  playerTopFace: {
+    position: 'absolute',
+    backgroundColor: '#fff8e8',
+    borderWidth: 1,
+    borderColor: '#f9eccd',
+    transform: [{ skewX: '-34deg' }],
+  },
+  playerSideFace: {
+    position: 'absolute',
+    backgroundColor: '#d9c5a4',
+    borderWidth: 1,
+    borderColor: '#c9b08e',
+    transform: [{ skewY: '-34deg' }],
   },
   playerTopGloss: {
     position: 'absolute',
