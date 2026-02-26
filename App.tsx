@@ -26,18 +26,61 @@ type RollAnim = {
   duration: number;
 };
 
+type Gate = {
+  id: string;
+  axis: 'x' | 'z';
+  at: number;
+  gapCenter: number;
+  gapWidth: number;
+  clearance: number;
+  tip: string;
+};
+
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-const BUILD_TAG = 'roll-rect-3';
+const BUILD_TAG = 'world-align-1';
 
 const FLOOR_Y = 0.01;
-const ARENA_HALF = 9.8;
+const ARENA_HALF = 14.5;
+const BOUNDARY_MARGIN = 0.5;
+const GATE_THICKNESS = 0.8;
+const GATE_HEIGHT = 3.4;
 const BLOCK_SIZE = { x: 1.45, y: 0.9, z: 2.25 };
 const HALF = {
   x: BLOCK_SIZE.x / 2,
   y: BLOCK_SIZE.y / 2,
   z: BLOCK_SIZE.z / 2,
 };
+
+const GATES: Gate[] = [
+  {
+    id: 'gate-1',
+    axis: 'z',
+    at: -4.2,
+    gapCenter: 0,
+    gapWidth: 2.2,
+    clearance: 1.18,
+    tip: 'Low gate: stay on a flat face.',
+  },
+  {
+    id: 'gate-2',
+    axis: 'z',
+    at: -8.8,
+    gapCenter: 2.8,
+    gapWidth: 1.34,
+    clearance: 1.85,
+    tip: 'Narrow gate: align your width first.',
+  },
+  {
+    id: 'gate-3',
+    axis: 'x',
+    at: 4.6,
+    gapCenter: -12.2,
+    gapWidth: 1.55,
+    clearance: 1.32,
+    tip: 'Final gate: roll to fit both width and height.',
+  },
+];
 
 let splooshAudioContext: any = null;
 let splooshSound: Audio.Sound | null = null;
@@ -169,6 +212,19 @@ function supportRadius(q: THREE.Quaternion, dir: THREE.Vector3) {
   );
 }
 
+function blockHalfExtents(q: THREE.Quaternion) {
+  return {
+    x: supportRadius(q, new THREE.Vector3(1, 0, 0)),
+    y: supportRadius(q, new THREE.Vector3(0, 1, 0)),
+    z: supportRadius(q, new THREE.Vector3(0, 0, 1)),
+  };
+}
+
+function pseudo(n: number) {
+  const x = Math.sin(n * 91.173 + 0.77) * 43758.5453;
+  return x - Math.floor(x);
+}
+
 function restingCenterY(q: THREE.Quaternion) {
   return FLOOR_Y + supportRadius(q, new THREE.Vector3(0, 1, 0));
 }
@@ -241,10 +297,10 @@ function MainMenu({ onStart }: { onStart: () => void }) {
       <View style={styles.menuOrbA} />
       <View style={styles.menuOrbB} />
 
-      <Text style={styles.kicker}>ADVANCED 3D PROTOTYPE</Text>
-      <Text style={styles.title}>Cream Cheese Block Lab</Text>
-      <Text style={styles.copyCenter}>Now true 3D with a rectangular cream-cheese block.</Text>
-      <Text style={styles.copyCenter}>Swipe to roll face-to-face like a dice block on a table.</Text>
+      <Text style={styles.kicker}>JOSH BLOCK: HEADSPACE</Text>
+      <Text style={styles.title}>Cream Cheese Open World</Text>
+      <Text style={styles.copyCenter}>Navigate inside Josh Block's mind-city and become a phone.</Text>
+      <Text style={styles.copyCenter}>Face-roll through alignment gates; city buildings mark hard boundaries.</Text>
 
       <Pressable style={styles.menuButtonPrimary} onPress={onStart}>
         <Text style={styles.menuButtonPrimaryText}>Start Run</Text>
@@ -275,9 +331,17 @@ function CubeLab({ onBack }: { onBack: () => void }) {
   const lastGestureRef = useRef({ dx: 0, dy: 0 });
 
   const [hud, setHud] = useState({ speed: '0.00', cam: '8°' });
+  const [toast, setToast] = useState('');
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastHudRef = useRef(0);
   const prevPosForSpeedRef = useRef(new THREE.Vector3(0, HALF.y + FLOOR_Y, 0));
   const lastTsRef = useRef(0);
+
+  const showToast = useCallback((text: string, ms = 1100) => {
+    setToast(text);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(''), ms);
+  }, []);
 
   const tryRoll = useCallback((dirWorld: THREE.Vector3) => {
     if (rollRef.current) return;
@@ -298,10 +362,40 @@ function CubeLab({ onBack }: { onBack: () => void }) {
 
     const rot90 = new THREE.Quaternion().setFromAxisAngle(axis, Math.PI / 2);
     const testPos = c0.clone().sub(pivot).applyQuaternion(rot90).add(pivot);
+    const testQuat = rot90.clone().multiply(q0).normalize();
 
-    if (Math.abs(testPos.x) > ARENA_HALF || Math.abs(testPos.z) > ARENA_HALF) {
+    testPos.y = restingCenterY(testQuat);
+
+    const ext = blockHalfExtents(testQuat);
+    if (
+      Math.abs(testPos.x) + ext.x > ARENA_HALF - BOUNDARY_MARGIN ||
+      Math.abs(testPos.z) + ext.z > ARENA_HALF - BOUNDARY_MARGIN
+    ) {
+      showToast('Boundary reached: city blocks this edge.');
       playSploosh(0.55);
       return;
+    }
+
+    for (const gate of GATES) {
+      const intersectsWall =
+        gate.axis === 'z'
+          ? Math.abs(testPos.z - gate.at) <= GATE_THICKNESS * 0.5 + ext.z
+          : Math.abs(testPos.x - gate.at) <= GATE_THICKNESS * 0.5 + ext.x;
+
+      if (!intersectsWall) continue;
+
+      const gapFit =
+        gate.axis === 'z'
+          ? Math.abs(testPos.x - gate.gapCenter) + ext.x <= gate.gapWidth * 0.5
+          : Math.abs(testPos.z - gate.gapCenter) + ext.z <= gate.gapWidth * 0.5;
+
+      const heightFit = testPos.y + ext.y <= gate.clearance;
+
+      if (!gapFit || !heightFit) {
+        showToast(gate.tip);
+        playSploosh(0.58);
+        return;
+      }
     }
 
     rollRef.current = {
@@ -314,7 +408,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
     };
 
     playSploosh(0.88);
-  }, []);
+  }, [showToast]);
 
   const panResponder = useMemo(
     () =>
@@ -457,12 +551,167 @@ function CubeLab({ onBack }: { onBack: () => void }) {
     floor.receiveShadow = true;
     scene.add(floor);
 
-    const grid = new THREE.GridHelper(34, 36, 0x7fa6db, 0x35588c);
+    const grid = new THREE.GridHelper(54, 54, 0x7fa6db, 0x35588c);
     grid.position.y = FLOOR_Y;
     const gm = grid.material as THREE.Material;
     gm.transparent = true;
-    gm.opacity = 0.34;
+    gm.opacity = 0.3;
     scene.add(grid);
+
+    const boundaryMat = new THREE.MeshStandardMaterial({ color: 0x44566f, roughness: 0.9 });
+    const boundaryTopMat = new THREE.MeshStandardMaterial({ color: 0x6f86a8, roughness: 0.55 });
+
+    const wallThickness = 0.7;
+    const wallHeight = 3.2;
+
+    const northSouthGeo = new THREE.BoxGeometry(ARENA_HALF * 2 + wallThickness, wallHeight, wallThickness);
+    const eastWestGeo = new THREE.BoxGeometry(wallThickness, wallHeight, ARENA_HALF * 2 + wallThickness);
+
+    const wallNorth = new THREE.Mesh(northSouthGeo, boundaryMat);
+    wallNorth.position.set(0, wallHeight * 0.5, -ARENA_HALF - wallThickness * 0.5);
+    wallNorth.castShadow = true;
+    wallNorth.receiveShadow = true;
+    scene.add(wallNorth);
+
+    const wallSouth = wallNorth.clone();
+    wallSouth.position.z = ARENA_HALF + wallThickness * 0.5;
+    scene.add(wallSouth);
+
+    const wallEast = new THREE.Mesh(eastWestGeo, boundaryMat);
+    wallEast.position.set(ARENA_HALF + wallThickness * 0.5, wallHeight * 0.5, 0);
+    wallEast.castShadow = true;
+    wallEast.receiveShadow = true;
+    scene.add(wallEast);
+
+    const wallWest = wallEast.clone();
+    wallWest.position.x = -ARENA_HALF - wallThickness * 0.5;
+    scene.add(wallWest);
+
+    // Big buildings around edges to define world bounds clearly.
+    const bGeo = new THREE.BoxGeometry(1.6, 1, 1.6);
+    for (let i = -6; i <= 6; i++) {
+      const z = i * 2.1;
+      const hA = 5 + pseudo(i + 11) * 7;
+      const hB = 5 + pseudo(i + 37) * 7;
+
+      const bA = new THREE.Mesh(
+        bGeo,
+        i % 2 === 0 ? boundaryMat : boundaryTopMat
+      );
+      bA.scale.set(1, hA, 1);
+      bA.position.set(-ARENA_HALF - 2.2, hA * 0.5, z);
+      bA.castShadow = true;
+      bA.receiveShadow = true;
+      scene.add(bA);
+
+      const bB = new THREE.Mesh(
+        bGeo,
+        i % 2 === 0 ? boundaryTopMat : boundaryMat
+      );
+      bB.scale.set(1, hB, 1);
+      bB.position.set(ARENA_HALF + 2.2, hB * 0.5, z);
+      bB.castShadow = true;
+      bB.receiveShadow = true;
+      scene.add(bB);
+    }
+
+    // Alignment puzzle gates (opening + low clearance beam).
+    const gateMat = new THREE.MeshStandardMaterial({ color: 0x7f8ca0, roughness: 0.88 });
+    const gateBeamMat = new THREE.MeshStandardMaterial({ color: 0xb99963, roughness: 0.66 });
+
+    for (const gate of GATES) {
+      const halfWorld = ARENA_HALF;
+
+      if (gate.axis === 'z') {
+        const gapMin = gate.gapCenter - gate.gapWidth * 0.5;
+        const gapMax = gate.gapCenter + gate.gapWidth * 0.5;
+
+        const leftW = Math.max(0, gapMin - -halfWorld);
+        if (leftW > 0.04) {
+          const left = new THREE.Mesh(
+            new THREE.BoxGeometry(leftW, GATE_HEIGHT, GATE_THICKNESS),
+            gateMat
+          );
+          left.position.set((-halfWorld + gapMin) * 0.5, GATE_HEIGHT * 0.5, gate.at);
+          left.castShadow = true;
+          left.receiveShadow = true;
+          scene.add(left);
+        }
+
+        const rightW = Math.max(0, halfWorld - gapMax);
+        if (rightW > 0.04) {
+          const right = new THREE.Mesh(
+            new THREE.BoxGeometry(rightW, GATE_HEIGHT, GATE_THICKNESS),
+            gateMat
+          );
+          right.position.set((gapMax + halfWorld) * 0.5, GATE_HEIGHT * 0.5, gate.at);
+          right.castShadow = true;
+          right.receiveShadow = true;
+          scene.add(right);
+        }
+
+        const topH = Math.max(0.12, GATE_HEIGHT - gate.clearance);
+        const beam = new THREE.Mesh(
+          new THREE.BoxGeometry(gate.gapWidth, topH, GATE_THICKNESS),
+          gateBeamMat
+        );
+        beam.position.set(gate.gapCenter, gate.clearance + topH * 0.5, gate.at);
+        beam.castShadow = true;
+        beam.receiveShadow = true;
+        scene.add(beam);
+      } else {
+        const gapMin = gate.gapCenter - gate.gapWidth * 0.5;
+        const gapMax = gate.gapCenter + gate.gapWidth * 0.5;
+
+        const nearW = Math.max(0, gapMin - -halfWorld);
+        if (nearW > 0.04) {
+          const near = new THREE.Mesh(
+            new THREE.BoxGeometry(GATE_THICKNESS, GATE_HEIGHT, nearW),
+            gateMat
+          );
+          near.position.set(gate.at, GATE_HEIGHT * 0.5, (-halfWorld + gapMin) * 0.5);
+          near.castShadow = true;
+          near.receiveShadow = true;
+          scene.add(near);
+        }
+
+        const farW = Math.max(0, halfWorld - gapMax);
+        if (farW > 0.04) {
+          const far = new THREE.Mesh(
+            new THREE.BoxGeometry(GATE_THICKNESS, GATE_HEIGHT, farW),
+            gateMat
+          );
+          far.position.set(gate.at, GATE_HEIGHT * 0.5, (gapMax + halfWorld) * 0.5);
+          far.castShadow = true;
+          far.receiveShadow = true;
+          scene.add(far);
+        }
+
+        const topH = Math.max(0.12, GATE_HEIGHT - gate.clearance);
+        const beam = new THREE.Mesh(
+          new THREE.BoxGeometry(GATE_THICKNESS, topH, gate.gapWidth),
+          gateBeamMat
+        );
+        beam.position.set(gate.at, gate.clearance + topH * 0.5, gate.gapCenter);
+        beam.castShadow = true;
+        beam.receiveShadow = true;
+        scene.add(beam);
+      }
+    }
+
+    // Phone destination marker in world.
+    const phone = new THREE.Mesh(
+      new THREE.BoxGeometry(0.9, 1.8, 0.16),
+      new THREE.MeshStandardMaterial({ color: 0x0f1523, roughness: 0.35, metalness: 0.12 })
+    );
+    phone.position.set(6.8, 1.0, -12.2);
+    phone.castShadow = true;
+    phone.receiveShadow = true;
+    scene.add(phone);
+
+    const phoneGlow = new THREE.PointLight(0x6fb1ff, 0.7, 8);
+    phoneGlow.position.set(6.8, 1.9, -12.2);
+    scene.add(phoneGlow);
 
     const blockMaterial = new THREE.MeshPhysicalMaterial({
       color: 0xf6edd8,
@@ -610,6 +859,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
   useEffect(() => {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
       rafRef.current = null;
       rendererRef.current = null;
       sceneRef.current = null;
@@ -633,7 +883,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       </View>
 
       <View style={styles.objectiveRow}>
-        <Text style={styles.objective}>Rect cream-cheese block. Face-roll movement. ({BUILD_TAG})</Text>
+        <Text style={styles.objective}>Josh Block headspace: solve alignment gates, reach the phone. ({BUILD_TAG})</Text>
       </View>
 
       <View style={styles.world}>
@@ -647,7 +897,14 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         <View style={styles.tutorialWrap}>
           <Text style={styles.tutorialText}>Phone: swipe up rolls down • swipe down rolls up • right side orbits camera</Text>
           <Text style={styles.tutorialText}>Desktop: A/D side roll • W back • S/Space forward • arrows camera</Text>
+          <Text style={styles.tutorialText}>Buildings are hard boundaries. Gates require correct block alignment.</Text>
         </View>
+
+        {toast.length > 0 && (
+          <View style={styles.toastWrap}>
+            <Text style={styles.toastText}>{toast}</Text>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -807,6 +1064,22 @@ const styles = StyleSheet.create({
   tutorialText: {
     color: '#d6e9ff',
     fontWeight: '700',
+    fontSize: 12,
+  },
+  toastWrap: {
+    position: 'absolute',
+    top: 12,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(8, 19, 36, 0.86)',
+    borderWidth: 1,
+    borderColor: 'rgba(172, 201, 244, 0.4)',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  toastText: {
+    color: '#e4f0ff',
+    fontWeight: '800',
     fontSize: 12,
   },
 });
