@@ -42,7 +42,7 @@ type Gate = {
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-const BUILD_TAG = 'world-align-4';
+const BUILD_TAG = 'world-align-5';
 
 const FLOOR_Y = 0.01;
 const ARENA_HALF = 14.5;
@@ -338,7 +338,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
   const blockRef = useRef<THREE.Mesh | null>(null);
   const shadowRef = useRef<THREE.Mesh | null>(null);
   const gateDoorRefs = useRef<Record<string, THREE.Mesh>>({});
-  const gateTriggerRefs = useRef<Record<string, THREE.Mesh>>({});
+  const gateTriggerRefs = useRef<Record<string, THREE.Object3D>>({});
   const activatedGatesRef = useRef<Set<string>>(new Set());
   const rafRef = useRef<number | null>(null);
 
@@ -640,6 +640,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
     const gateBeamMat = new THREE.MeshStandardMaterial({ color: 0xb99963, roughness: 0.66 });
     const gateDoorMat = new THREE.MeshStandardMaterial({ color: 0x4d5f7a, roughness: 0.82 });
     const triggerInactiveMat = new THREE.MeshStandardMaterial({ color: 0x6f5a39, roughness: 0.65 });
+    const triggerOutlineMat = new THREE.MeshStandardMaterial({ color: 0x39a8ff, roughness: 0.42, metalness: 0.08 });
 
     gateDoorRefs.current = {};
     gateTriggerRefs.current = {};
@@ -744,19 +745,44 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         gateDoorRefs.current[gate.id] = door;
       }
 
-      const trigger = new THREE.Mesh(
-        new THREE.BoxGeometry(
-          gate.triggerAxis === 'x' ? 1.55 : 0.95,
-          0.08,
-          gate.triggerAxis === 'z' ? 1.55 : 0.95
-        ),
+      // Marker now matches cream-cheese footprint exactly for clear intended alignment.
+      const footprintX = gate.triggerAxis === 'x' ? BLOCK_SIZE.x : BLOCK_SIZE.z;
+      const footprintZ = gate.triggerAxis === 'x' ? BLOCK_SIZE.z : BLOCK_SIZE.x;
+
+      const triggerBase = new THREE.Mesh(
+        new THREE.BoxGeometry(footprintX, 0.08, footprintZ),
         triggerInactiveMat.clone()
       );
-      trigger.position.set(gate.triggerX, FLOOR_Y + 0.04, gate.triggerZ);
-      trigger.castShadow = false;
-      trigger.receiveShadow = true;
-      scene.add(trigger);
-      gateTriggerRefs.current[gate.id] = trigger;
+      triggerBase.position.set(gate.triggerX, FLOOR_Y + 0.04, gate.triggerZ);
+      triggerBase.castShadow = false;
+      triggerBase.receiveShadow = true;
+      scene.add(triggerBase);
+
+      const triggerOutline = new THREE.Mesh(
+        new THREE.BoxGeometry(footprintX + 0.12, 0.03, footprintZ + 0.12),
+        triggerOutlineMat.clone()
+      );
+      triggerOutline.position.set(gate.triggerX, FLOOR_Y + 0.095, gate.triggerZ);
+      triggerOutline.castShadow = false;
+      triggerOutline.receiveShadow = true;
+      scene.add(triggerOutline);
+
+      // Arrow cue to indicate required long-axis direction.
+      const arrow = new THREE.Mesh(
+        new THREE.ConeGeometry(0.16, 0.34, 4),
+        triggerOutlineMat.clone()
+      );
+      arrow.position.set(gate.triggerX, FLOOR_Y + 0.2, gate.triggerZ);
+      arrow.rotation.x = -Math.PI / 2;
+      arrow.rotation.z = gate.triggerAxis === 'x' ? -Math.PI / 2 : 0;
+      scene.add(arrow);
+
+      const triggerGroup = new THREE.Group();
+      triggerGroup.add(triggerBase);
+      triggerGroup.add(triggerOutline);
+      triggerGroup.add(arrow);
+      scene.add(triggerGroup);
+      gateTriggerRefs.current[gate.id] = triggerGroup;
     }
 
     // Phone destination marker in world.
@@ -874,9 +900,14 @@ function CubeLab({ onBack }: { onBack: () => void }) {
 
             const trigger = gateTriggerRefs.current[gate.id];
             if (trigger) {
-              (trigger.material as THREE.MeshStandardMaterial).color.setHex(0x3fbf78);
-              (trigger.material as THREE.MeshStandardMaterial).emissive = new THREE.Color(0x1e7a4a);
-              (trigger.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.45;
+              trigger.traverse((node) => {
+                const mesh = node as THREE.Mesh;
+                const mat = mesh.material as THREE.MeshStandardMaterial | undefined;
+                if (!mat || !('color' in mat)) return;
+                mat.color.setHex(0x3fbf78);
+                mat.emissive = new THREE.Color(0x1e7a4a);
+                mat.emissiveIntensity = 0.45;
+              });
             }
 
             showToast(`${gate.id.toUpperCase()} unlocked`);
@@ -1004,7 +1035,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         <View style={styles.tutorialWrap}>
           <Text style={styles.tutorialText}>Phone: swipe up rolls down • swipe down rolls up • right side orbits camera</Text>
           <Text style={styles.tutorialText}>Desktop: A/D side roll • W back • S/Space forward • arrows camera</Text>
-          <Text style={styles.tutorialText}>Get near a marker and it snaps to tile-center; correct orientation unlocks gate.</Text>
+          <Text style={styles.tutorialText}>Marker footprint matches block size; snap onto it with right orientation to unlock.</Text>
           <Text style={styles.tutorialText}>Buildings are hard boundaries at the world edge.</Text>
         </View>
 
