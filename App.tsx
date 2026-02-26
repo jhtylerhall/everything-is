@@ -38,6 +38,8 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 const ARENA_HALF = 8.6;
 const IMPULSE_BASE = 6.8;
+const CUBE_SIZE = 1.65;
+const BUILD_TAG = 'ix-fix-1';
 
 let splooshAudioContext: any = null;
 let splooshSound: Audio.Sound | null = null;
@@ -208,8 +210,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
     squish: 1,
   });
 
-  const cameraTargetRef = useRef({ yaw: 18, pitch: 24 });
-  const cameraStateRef = useRef({ yaw: 18, pitch: 24 });
+  const cameraTargetRef = useRef({ yaw: 12, pitch: 28 });
+  const cameraStateRef = useRef({ yaw: 12, pitch: 28 });
   const cameraFollowRef = useRef({ x: 0, z: 0, y: 0.93 });
 
   const gestureModeRef = useRef<'move' | 'camera' | null>(null);
@@ -220,7 +222,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
   const lastTsRef = useRef(0);
   const lastHudRef = useRef(0);
 
-  const [hud, setHud] = useState({ speed: '0.00', cam: '18°' });
+  const [hud, setHud] = useState({ speed: '0.00', cam: '12°' });
 
   const pushCube = useCallback((lateral: number, forward: number, strength: number) => {
     const motion = motionRef.current;
@@ -275,7 +277,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
 
           if (gestureModeRef.current === 'camera') {
             cameraTargetRef.current.yaw = clamp(cameraTargetRef.current.yaw + ddx * 0.43, -150, 150);
-            cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch - ddy * 0.28, 14, 42);
+            cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch - ddy * 0.28, 18, 38);
             return;
           }
 
@@ -346,8 +348,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
 
       if (key === 'arrowleft') cameraTargetRef.current.yaw = clamp(cameraTargetRef.current.yaw - 5, -150, 150);
       if (key === 'arrowright') cameraTargetRef.current.yaw = clamp(cameraTargetRef.current.yaw + 5, -150, 150);
-      if (key === 'arrowup') cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch - 4, 14, 42);
-      if (key === 'arrowdown') cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch + 4, 14, 42);
+      if (key === 'arrowup') cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch - 4, 18, 38);
+      if (key === 'arrowdown') cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch + 4, 18, 38);
     };
 
     window.addEventListener('keydown', onKeyDown);
@@ -421,7 +423,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       specularIntensity: 0.35,
     });
 
-    const cube = new THREE.Mesh(new THREE.BoxGeometry(1.65, 1.65, 1.65), cubeMaterial);
+    const cube = new THREE.Mesh(new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE), cubeMaterial);
     cube.castShadow = true;
     cube.receiveShadow = false;
     cube.position.set(0, 0.93, 0);
@@ -509,19 +511,40 @@ function CubeLab({ onBack }: { onBack: () => void }) {
 
       const speed = Math.hypot(m.vx, m.vz);
 
-      const cubeScaleY = m.squish;
-      const dynamicLift = (Math.abs(Math.sin(m.rx)) + Math.abs(Math.sin(m.rz))) * 0.22;
-      const cubeCenterY = 0.825 * cubeScaleY + 0.01 + m.hop + dynamicLift;
+      const scaleX = 1 / m.squish;
+      const scaleY = m.squish;
+      const scaleZ = 1 / m.squish;
+      const half = CUBE_SIZE * 0.5;
+
+      const corner = new THREE.Vector3();
+      const euler = new THREE.Euler(m.rx, m.ry, m.rz, 'XYZ');
+      let minCornerY = Infinity;
+
+      for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+          for (const sz of [-1, 1]) {
+            corner.set(sx * half * scaleX, sy * half * scaleY, sz * half * scaleZ);
+            corner.applyEuler(euler);
+            if (corner.y < minCornerY) minCornerY = corner.y;
+          }
+        }
+      }
+
+      let cubeCenterY = 0.01 + m.hop;
+      const floorClearance = cubeCenterY + minCornerY;
+      if (floorClearance < 0.01) {
+        cubeCenterY += 0.01 - floorClearance;
+      }
 
       cubeMesh.position.set(m.x, cubeCenterY, m.z);
       cubeMesh.rotation.set(m.rx, m.ry, m.rz);
-      cubeMesh.scale.set(1 / m.squish, m.squish, 1 / m.squish);
+      cubeMesh.scale.set(scaleX, scaleY, scaleZ);
 
       contact.position.set(m.x, 0.01, m.z);
       const shScale = 1 + speed * 0.06;
       contact.scale.set(shScale, shScale, 1);
       (contact.material as THREE.MeshBasicMaterial).opacity = clamp(
-        0.30 - (m.hop + dynamicLift) * 0.2,
+        0.30 - Math.max(0, floorClearance) * 0.26,
         0.06,
         0.30
       );
@@ -530,23 +553,34 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       const cameraState = cameraStateRef.current;
       const cameraFollow = cameraFollowRef.current;
 
-      cameraState.yaw = lerp(cameraState.yaw, cameraTarget.yaw, Math.min(1, dt * 14));
-      cameraState.pitch = lerp(cameraState.pitch, cameraTarget.pitch, Math.min(1, dt * 14));
+      cameraState.yaw = lerp(cameraState.yaw, cameraTarget.yaw, Math.min(1, dt * 16));
+      cameraState.pitch = lerp(cameraState.pitch, cameraTarget.pitch, Math.min(1, dt * 16));
 
-      cameraFollow.x = lerp(cameraFollow.x, m.x, Math.min(1, dt * 14));
-      cameraFollow.z = lerp(cameraFollow.z, m.z, Math.min(1, dt * 14));
-      cameraFollow.y = lerp(cameraFollow.y, cubeCenterY, Math.min(1, dt * 14));
+      cameraFollow.x = lerp(cameraFollow.x, m.x, Math.min(1, dt * 16));
+      cameraFollow.z = lerp(cameraFollow.z, m.z, Math.min(1, dt * 16));
+      cameraFollow.y = lerp(cameraFollow.y, cubeCenterY, Math.min(1, dt * 16));
 
       const yaw = THREE.MathUtils.degToRad(cameraState.yaw);
       const pitch = THREE.MathUtils.degToRad(cameraState.pitch);
-      const radius = 8.4 + speed * 0.12;
+
+      const boundRadius = Math.sqrt(3) * half * Math.max(scaleX, scaleY, scaleZ);
+      const vFov = THREE.MathUtils.degToRad(c.fov);
+      const aspect = c.aspect || (gl.drawingBufferWidth / gl.drawingBufferHeight);
+      const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
+      const fitDistance =
+        Math.max(
+          boundRadius / Math.tan(vFov / 2),
+          boundRadius / Math.tan(Math.max(0.2, hFov / 2))
+        ) * 1.4;
+
+      const radius = Math.max(8.8 + speed * 0.12, fitDistance);
 
       const cx = cameraFollow.x + Math.sin(yaw) * Math.cos(pitch) * radius;
-      const cy = Math.max(2.35, cameraFollow.y + 1.45 + Math.sin(pitch) * radius * 0.78);
+      const cy = Math.max(2.5, cameraFollow.y + 1.55 + Math.sin(pitch) * radius * 0.78);
       const cz = cameraFollow.z + Math.cos(yaw) * Math.cos(pitch) * radius;
 
       c.position.set(cx, cy, cz);
-      c.lookAt(m.x, cubeCenterY + 0.2, m.z);
+      c.lookAt(cameraFollow.x, cameraFollow.y + 0.08, cameraFollow.z);
 
       r.render(s, c);
       gl.endFrameEXP();
@@ -591,7 +625,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       </View>
 
       <View style={styles.objectiveRow}>
-        <Text style={styles.objective}>Real 3D cube. Swipe to move, rotate, and burst.</Text>
+        <Text style={styles.objective}>Real 3D cube. Swipe to move, rotate, and burst. ({BUILD_TAG})</Text>
       </View>
 
       <View style={styles.world}>
