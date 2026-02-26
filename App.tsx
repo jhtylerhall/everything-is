@@ -42,10 +42,11 @@ type Gate = {
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-const BUILD_TAG = 'world-align-2';
+const BUILD_TAG = 'world-align-3';
 
 const FLOOR_Y = 0.01;
 const ARENA_HALF = 14.5;
+const GRID_STEP = 0.5;
 const BOUNDARY_MARGIN = 0.5;
 const GATE_THICKNESS = 0.8;
 const GATE_HEIGHT = 3.4;
@@ -60,12 +61,12 @@ const GATES: Gate[] = [
   {
     id: 'gate-1',
     axis: 'z',
-    at: -4.2,
-    gapCenter: 0,
-    gapWidth: 2.2,
+    at: -4.0,
+    gapCenter: 0.0,
+    gapWidth: 2.0,
     clearance: 1.18,
-    triggerX: -1.9,
-    triggerZ: -1.3,
+    triggerX: -2.0,
+    triggerZ: -1.0,
     triggerAxis: 'z',
     triggerMaxHalfY: 0.52,
     tip: 'Align to the floor marker to open Gate 1.',
@@ -73,12 +74,12 @@ const GATES: Gate[] = [
   {
     id: 'gate-2',
     axis: 'z',
-    at: -8.8,
-    gapCenter: 2.8,
-    gapWidth: 1.34,
+    at: -8.5,
+    gapCenter: 3.0,
+    gapWidth: 1.5,
     clearance: 1.85,
-    triggerX: 1.2,
-    triggerZ: -6.2,
+    triggerX: 1.0,
+    triggerZ: -6.0,
     triggerAxis: 'x',
     triggerMaxHalfY: 0.8,
     tip: 'Align long-side X on the marker to open Gate 2.',
@@ -86,12 +87,12 @@ const GATES: Gate[] = [
   {
     id: 'gate-3',
     axis: 'x',
-    at: 4.6,
-    gapCenter: -12.2,
-    gapWidth: 1.55,
+    at: 4.5,
+    gapCenter: -12.0,
+    gapWidth: 1.5,
     clearance: 1.32,
-    triggerX: 2.2,
-    triggerZ: -10.8,
+    triggerX: 2.0,
+    triggerZ: -11.0,
     triggerAxis: 'z',
     triggerMaxHalfY: 0.65,
     tip: 'Final marker: align cleanly to unlock the phone lane.',
@@ -108,6 +109,10 @@ function clamp(n: number, min: number, max: number) {
 
 function lerp(a: number, b: number, t: number) {
   return a + (b - a) * t;
+}
+
+function snapToGrid(v: number) {
+  return Math.round(v / GRID_STEP) * GRID_STEP;
 }
 
 function easeInOut(t: number) {
@@ -383,6 +388,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
     const testPos = c0.clone().sub(pivot).applyQuaternion(rot90).add(pivot);
     const testQuat = rot90.clone().multiply(q0).normalize();
 
+    testPos.x = snapToGrid(testPos.x);
+    testPos.z = snapToGrid(testPos.z);
     testPos.y = restingCenterY(testQuat);
 
     const ext = blockHalfExtents(testQuat);
@@ -828,6 +835,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
 
         if (t >= 1) {
           stateNow.quat.copy(snapToOrthogonalQuat(stateNow.quat));
+          stateNow.pos.x = snapToGrid(stateNow.pos.x);
+          stateNow.pos.z = snapToGrid(stateNow.pos.z);
           stateNow.pos.y = restingCenterY(stateNow.quat);
           stateNow.pos.x = clamp(stateNow.pos.x, -ARENA_HALF, ARENA_HALF);
           stateNow.pos.z = clamp(stateNow.pos.z, -ARENA_HALF, ARENA_HALF);
@@ -843,8 +852,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
           if (activatedGatesRef.current.has(gate.id)) continue;
 
           const onMarker =
-            Math.abs(stateNow.pos.x - gate.triggerX) <= 0.44 &&
-            Math.abs(stateNow.pos.z - gate.triggerZ) <= 0.44;
+            Math.abs(stateNow.pos.x - gate.triggerX) <= GRID_STEP * 0.26 &&
+            Math.abs(stateNow.pos.z - gate.triggerZ) <= GRID_STEP * 0.26;
           if (!onMarker) continue;
 
           const orientationOk = horizontalAxis === gate.triggerAxis;
@@ -865,6 +874,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
 
             showToast(`${gate.id.toUpperCase()} unlocked`);
             playSploosh(0.95);
+          } else {
+            showToast(`Marker alignment wrong for ${gate.id.toUpperCase()}`);
           }
         }
       }
@@ -972,7 +983,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       </View>
 
       <View style={styles.objectiveRow}>
-        <Text style={styles.objective}>Josh Block headspace: align on floor markers to unlock gates, reach the phone. ({BUILD_TAG})</Text>
+        <Text style={styles.objective}>Josh Block headspace: tile-locked rolling, align on markers to unlock gates. ({BUILD_TAG})</Text>
       </View>
 
       <View style={styles.world}>
