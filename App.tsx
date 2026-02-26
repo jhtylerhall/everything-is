@@ -28,7 +28,7 @@ type RollAnim = {
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-const BUILD_TAG = 'roll-rect-1';
+const BUILD_TAG = 'roll-rect-2';
 
 const FLOOR_Y = 0.01;
 const ARENA_HALF = 9.8;
@@ -299,7 +299,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
               if (Math.abs(dx) > Math.abs(dy)) {
                 tryRoll(dx > 0 ? right : right.clone().multiplyScalar(-1));
               } else {
-                tryRoll(dy < 0 ? fwd : fwd.clone().multiplyScalar(-1));
+                // Inverted vertical movement: swipe up rolls "down" / toward camera.
+                tryRoll(dy < 0 ? fwd.clone().multiplyScalar(-1) : fwd);
               }
             }
           }
@@ -346,8 +347,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
 
       if (key === 'a') return void tryRoll(right.clone().multiplyScalar(-1));
       if (key === 'd') return void tryRoll(right);
-      if (key === 'w' || key === ' ') return void tryRoll(fwd);
-      if (key === 's') return void tryRoll(fwd.clone().multiplyScalar(-1));
+      if (key === 'w') return void tryRoll(fwd.clone().multiplyScalar(-1));
+      if (key === 's' || key === ' ') return void tryRoll(fwd);
 
       if (key === 'arrowleft') cameraTargetRef.current.yaw = clamp(cameraTargetRef.current.yaw - 5, -155, 155);
       if (key === 'arrowright') cameraTargetRef.current.yaw = clamp(cameraTargetRef.current.yaw + 5, -155, 155);
@@ -595,8 +596,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         </View>
 
         <View style={styles.tutorialWrap}>
-          <Text style={styles.tutorialText}>Phone: left swipe rolls block • right swipe orbits camera</Text>
-          <Text style={styles.tutorialText}>Desktop: W/A/S/D rolls • arrows camera • Space forward roll</Text>
+          <Text style={styles.tutorialText}>Phone: swipe up rolls down • swipe down rolls up • right side orbits camera</Text>
+          <Text style={styles.tutorialText}>Desktop: A/D side roll • W back • S/Space forward • arrows camera</Text>
         </View>
       </View>
     </View>
