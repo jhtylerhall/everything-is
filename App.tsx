@@ -208,7 +208,9 @@ function CubeLab({ onBack }: { onBack: () => void }) {
     squish: 1,
   });
 
-  const cameraOrbitRef = useRef({ yaw: 24, pitch: 22 });
+  const cameraTargetRef = useRef({ yaw: 24, pitch: 22 });
+  const cameraStateRef = useRef({ yaw: 24, pitch: 22 });
+  const cameraFollowRef = useRef({ x: 0, z: 0, y: 0.93 });
 
   const gestureModeRef = useRef<'move' | 'camera' | null>(null);
   const gestureLastRef = useRef({ dx: 0, dy: 0 });
@@ -222,7 +224,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
 
   const pushCube = useCallback((lateral: number, forward: number, strength: number) => {
     const motion = motionRef.current;
-    const yawRad = (cameraOrbitRef.current.yaw * Math.PI) / 180;
+    const yawRad = (cameraStateRef.current.yaw * Math.PI) / 180;
 
     const right = { x: Math.cos(yawRad), z: -Math.sin(yawRad) };
     const fwd = { x: Math.sin(yawRad), z: Math.cos(yawRad) };
@@ -272,8 +274,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
           gestureLastRef.current = { dx: g.dx, dy: g.dy };
 
           if (gestureModeRef.current === 'camera') {
-            cameraOrbitRef.current.yaw = clamp(cameraOrbitRef.current.yaw + ddx * 0.43, -150, 150);
-            cameraOrbitRef.current.pitch = clamp(cameraOrbitRef.current.pitch - ddy * 0.28, 8, 58);
+            cameraTargetRef.current.yaw = clamp(cameraTargetRef.current.yaw + ddx * 0.43, -150, 150);
+            cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch - ddy * 0.28, 10, 52);
             return;
           }
 
@@ -342,10 +344,10 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       if (key === 's') return void pushCube(0, -1, 0.72);
       if (key === ' ') return void burstForward(1.22);
 
-      if (key === 'arrowleft') cameraOrbitRef.current.yaw = clamp(cameraOrbitRef.current.yaw - 5, -150, 150);
-      if (key === 'arrowright') cameraOrbitRef.current.yaw = clamp(cameraOrbitRef.current.yaw + 5, -150, 150);
-      if (key === 'arrowup') cameraOrbitRef.current.pitch = clamp(cameraOrbitRef.current.pitch - 4, 8, 58);
-      if (key === 'arrowdown') cameraOrbitRef.current.pitch = clamp(cameraOrbitRef.current.pitch + 4, 8, 58);
+      if (key === 'arrowleft') cameraTargetRef.current.yaw = clamp(cameraTargetRef.current.yaw - 5, -150, 150);
+      if (key === 'arrowright') cameraTargetRef.current.yaw = clamp(cameraTargetRef.current.yaw + 5, -150, 150);
+      if (key === 'arrowup') cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch - 4, 10, 52);
+      if (key === 'arrowdown') cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch + 4, 10, 52);
     };
 
     window.addEventListener('keydown', onKeyDown);
@@ -507,7 +509,10 @@ function CubeLab({ onBack }: { onBack: () => void }) {
 
       const speed = Math.hypot(m.vx, m.vz);
 
-      cubeMesh.position.set(m.x, 0.93 + m.hop, m.z);
+      const cubeScaleY = m.squish;
+      const cubeCenterY = 0.925 * cubeScaleY + 0.01 + m.hop;
+
+      cubeMesh.position.set(m.x, cubeCenterY, m.z);
       cubeMesh.rotation.set(m.rx, m.ry, m.rz);
       cubeMesh.scale.set(1 / m.squish, m.squish, 1 / m.squish);
 
@@ -516,16 +521,27 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       contact.scale.set(shScale, shScale, 1);
       (contact.material as THREE.MeshBasicMaterial).opacity = clamp(0.28 - m.hop * 0.17, 0.08, 0.28);
 
-      const yaw = THREE.MathUtils.degToRad(cameraOrbitRef.current.yaw);
-      const pitch = THREE.MathUtils.degToRad(cameraOrbitRef.current.pitch);
-      const radius = 7.1;
+      const cameraTarget = cameraTargetRef.current;
+      const cameraState = cameraStateRef.current;
+      const cameraFollow = cameraFollowRef.current;
 
-      const cx = m.x + Math.sin(yaw) * Math.cos(pitch) * radius;
-      const cy = 1.2 + Math.sin(pitch) * radius + m.hop * 0.1;
-      const cz = m.z + Math.cos(yaw) * Math.cos(pitch) * radius;
+      cameraState.yaw = lerp(cameraState.yaw, cameraTarget.yaw, Math.min(1, dt * 10));
+      cameraState.pitch = lerp(cameraState.pitch, cameraTarget.pitch, Math.min(1, dt * 10));
+
+      cameraFollow.x = lerp(cameraFollow.x, m.x, Math.min(1, dt * 8));
+      cameraFollow.z = lerp(cameraFollow.z, m.z, Math.min(1, dt * 8));
+      cameraFollow.y = lerp(cameraFollow.y, cubeCenterY, Math.min(1, dt * 8));
+
+      const yaw = THREE.MathUtils.degToRad(cameraState.yaw);
+      const pitch = THREE.MathUtils.degToRad(cameraState.pitch);
+      const radius = 6.4 + speed * 0.08;
+
+      const cx = cameraFollow.x + Math.sin(yaw) * Math.cos(pitch) * radius;
+      const cy = Math.max(2.1, cameraFollow.y + 1.15 + Math.sin(pitch) * radius * 0.85);
+      const cz = cameraFollow.z + Math.cos(yaw) * Math.cos(pitch) * radius;
 
       c.position.set(cx, cy, cz);
-      c.lookAt(m.x, 0.95 + m.hop * 0.7, m.z);
+      c.lookAt(cameraFollow.x, cameraFollow.y + 0.32, cameraFollow.z);
 
       r.render(s, c);
       gl.endFrameEXP();
@@ -534,7 +550,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         lastHudRef.current = ts;
         setHud({
           speed: speed.toFixed(2),
-          cam: `${Math.round(cameraOrbitRef.current.yaw)}°`,
+          cam: `${Math.round(cameraStateRef.current.yaw)}°`,
         });
       }
 
