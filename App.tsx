@@ -17,28 +17,27 @@ import * as THREE from 'three';
 
 type Screen = 'menu' | 'game';
 
-type MotionState = {
-  x: number;
-  z: number;
-  vx: number;
-  vz: number;
-  rx: number;
-  ry: number;
-  rz: number;
-  spinX: number;
-  spinY: number;
-  spinZ: number;
-  hop: number;
-  hopVy: number;
-  squish: number;
+type RollAnim = {
+  fromPos: THREE.Vector3;
+  fromQuat: THREE.Quaternion;
+  axis: THREE.Vector3;
+  pivot: THREE.Vector3;
+  elapsed: number;
+  duration: number;
 };
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-const ARENA_HALF = 8.6;
-const IMPULSE_BASE = 6.8;
-const CUBE_SIZE = 1.65;
-const BUILD_TAG = 'ix-fix-2';
+const BUILD_TAG = 'roll-rect-1';
+
+const FLOOR_Y = 0.01;
+const ARENA_HALF = 9.8;
+const BLOCK_SIZE = { x: 1.45, y: 0.9, z: 2.25 };
+const HALF = {
+  x: BLOCK_SIZE.x / 2,
+  y: BLOCK_SIZE.y / 2,
+  z: BLOCK_SIZE.z / 2,
+};
 
 let splooshAudioContext: any = null;
 let splooshSound: Audio.Sound | null = null;
@@ -50,6 +49,10 @@ function clamp(n: number, min: number, max: number) {
 
 function lerp(a: number, b: number, t: number) {
   return a + (b - a) * t;
+}
+
+function easeInOut(t: number) {
+  return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
 }
 
 function playSplooshWebFallback(intensity = 1) {
@@ -93,12 +96,12 @@ function playSplooshWebFallback(intensity = 1) {
 
     const osc = ctx.createOscillator();
     osc.type = 'triangle';
-    osc.frequency.setValueAtTime(180, now);
+    osc.frequency.setValueAtTime(176, now);
     osc.frequency.exponentialRampToValueAtTime(62, now + 0.16);
 
     const g2 = ctx.createGain();
     g2.gain.setValueAtTime(0.0001, now);
-    g2.gain.exponentialRampToValueAtTime(0.12 * intensity, now + 0.01);
+    g2.gain.exponentialRampToValueAtTime(0.11 * intensity, now + 0.01);
     g2.gain.exponentialRampToValueAtTime(0.0001, now + 0.17);
 
     osc.connect(g2);
@@ -137,7 +140,7 @@ async function ensureSplooshLoaded() {
 
 function playSploosh(intensity = 1) {
   const rate = clamp(0.9 + intensity * 0.16, 0.82, 1.4);
-  const volume = clamp(0.28 + intensity * 0.28, 0.18, 1);
+  const volume = clamp(0.26 + intensity * 0.3, 0.18, 1);
 
   void (async () => {
     try {
@@ -152,6 +155,22 @@ function playSploosh(intensity = 1) {
 
     playSplooshWebFallback(intensity);
   })();
+}
+
+function supportRadius(q: THREE.Quaternion, dir: THREE.Vector3) {
+  const ux = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+  const uy = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+  const uz = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
+
+  return (
+    Math.abs(dir.dot(ux)) * HALF.x +
+    Math.abs(dir.dot(uy)) * HALF.y +
+    Math.abs(dir.dot(uz)) * HALF.z
+  );
+}
+
+function restingCenterY(q: THREE.Quaternion) {
+  return FLOOR_Y + supportRadius(q, new THREE.Vector3(0, 1, 0));
 }
 
 export default function App() {
@@ -173,10 +192,9 @@ function MainMenu({ onStart }: { onStart: () => void }) {
       <View style={styles.menuOrbB} />
 
       <Text style={styles.kicker}>ADVANCED 3D PROTOTYPE</Text>
-      <Text style={styles.title}>Cream Cheese Cube Lab</Text>
-      <Text style={styles.copyCenter}>Now using real 3D rendering with expo-gl + three.</Text>
-      <Text style={styles.copyCenter}>Phone: swipe left zone to move, right zone to orbit camera.</Text>
-      <Text style={styles.copyCenter}>Desktop: W/A/S/D movement, Space burst, arrows for camera.</Text>
+      <Text style={styles.title}>Cream Cheese Block Lab</Text>
+      <Text style={styles.copyCenter}>Now true 3D with a rectangular cream-cheese block.</Text>
+      <Text style={styles.copyCenter}>Swipe to roll face-to-face like a dice block on a table.</Text>
 
       <Pressable style={styles.menuButtonPrimary} onPress={onStart}>
         <Text style={styles.menuButtonPrimaryText}>Start Run</Text>
@@ -189,74 +207,66 @@ function CubeLab({ onBack }: { onBack: () => void }) {
   const rendererRef = useRef<any>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
-  const cubeRef = useRef<THREE.Mesh | null>(null);
+  const blockRef = useRef<THREE.Mesh | null>(null);
   const shadowRef = useRef<THREE.Mesh | null>(null);
   const rafRef = useRef<number | null>(null);
 
-  const motionRef = useRef<MotionState>({
-    x: 0,
-    z: 0,
-    vx: 0,
-    vz: 0,
-    rx: 0.12,
-    ry: 0.32,
-    rz: 0,
-    spinX: 0,
-    spinY: 0,
-    spinZ: 0,
-    hop: 0,
-    hopVy: 0,
-    squish: 1,
+  const blockStateRef = useRef({
+    pos: new THREE.Vector3(0, HALF.y + FLOOR_Y, 0),
+    quat: new THREE.Quaternion(),
   });
 
-  const cameraTargetRef = useRef({ yaw: 12, pitch: 28 });
-  const cameraStateRef = useRef({ yaw: 12, pitch: 28 });
-  const cameraFollowRef = useRef({ x: 0, z: 0, y: 0.93 });
+  const rollRef = useRef<RollAnim | null>(null);
+  const cameraTargetRef = useRef({ yaw: 8, pitch: 28 });
+  const cameraStateRef = useRef({ yaw: 8, pitch: 28 });
+  const cameraFollowRef = useRef({ x: 0, z: 0, y: HALF.y + FLOOR_Y });
 
   const gestureModeRef = useRef<'move' | 'camera' | null>(null);
-  const gestureLastRef = useRef({ dx: 0, dy: 0 });
-  const swipeAccumRef = useRef({ dx: 0, dy: 0 });
-  const burstLockRef = useRef(false);
+  const lastGestureRef = useRef({ dx: 0, dy: 0 });
 
-  const lastTsRef = useRef(0);
+  const [hud, setHud] = useState({ speed: '0.00', cam: '8°' });
   const lastHudRef = useRef(0);
+  const prevPosForSpeedRef = useRef(new THREE.Vector3(0, HALF.y + FLOOR_Y, 0));
+  const lastTsRef = useRef(0);
 
-  const [hud, setHud] = useState({ speed: '0.00', cam: '12°' });
+  const tryRoll = useCallback((dirWorld: THREE.Vector3) => {
+    if (rollRef.current) return;
 
-  const pushCube = useCallback((lateral: number, forward: number, strength: number) => {
-    const motion = motionRef.current;
-    const yawRad = (cameraStateRef.current.yaw * Math.PI) / 180;
+    const d = dirWorld.clone().setY(0);
+    if (d.lengthSq() < 1e-5) return;
+    d.normalize();
 
-    const right = { x: Math.cos(yawRad), z: -Math.sin(yawRad) };
-    const fwd = { x: Math.sin(yawRad), z: Math.cos(yawRad) };
+    const state = blockStateRef.current;
+    const q0 = state.quat.clone();
+    const c0 = state.pos.clone();
 
-    let wx = right.x * lateral + fwd.x * forward;
-    let wz = right.z * lateral + fwd.z * forward;
+    const up = new THREE.Vector3(0, 1, 0);
+    const axis = new THREE.Vector3().crossVectors(up, d).normalize();
+    if (axis.lengthSq() < 1e-5) return;
 
-    const l = Math.hypot(wx, wz) || 1;
-    wx /= l;
-    wz /= l;
+    const rUp = supportRadius(q0, up);
+    const rDir = supportRadius(q0, d);
+    const pivot = c0.clone().addScaledVector(d, rDir).addScaledVector(up, -rUp);
 
-    const impulse = IMPULSE_BASE * strength;
+    const rot90 = new THREE.Quaternion().setFromAxisAngle(axis, Math.PI / 2);
+    const testPos = c0.clone().sub(pivot).applyQuaternion(rot90).add(pivot);
 
-    motion.vx += wx * impulse;
-    motion.vz += wz * impulse;
+    if (Math.abs(testPos.x) > ARENA_HALF || Math.abs(testPos.z) > ARENA_HALF) {
+      playSploosh(0.55);
+      return;
+    }
 
-    motion.spinX += wz * strength * 7.2;
-    motion.spinZ += -wx * strength * 7.2;
-    motion.spinY += wx * strength * 1.8;
+    rollRef.current = {
+      fromPos: c0,
+      fromQuat: q0,
+      axis,
+      pivot,
+      elapsed: 0,
+      duration: 0.16,
+    };
 
-    motion.squish = 0.86;
-
-    playSploosh(0.62 + strength * 0.36);
+    playSploosh(0.88);
   }, []);
-
-  const burstForward = useCallback((strength = 1.1) => {
-    const motion = motionRef.current;
-    pushCube(0, 1, strength);
-    motion.hopVy = Math.max(motion.hopVy, 2.7 * strength);
-    motion.squish = 1.16;
-  }, [pushCube]);
 
   const panResponder = useMemo(
     () =>
@@ -265,53 +275,44 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 3 || Math.abs(g.dy) > 3,
         onPanResponderGrant: (evt) => {
           gestureModeRef.current = evt.nativeEvent.locationX > SCREEN_WIDTH * 0.52 ? 'camera' : 'move';
-          gestureLastRef.current = { dx: 0, dy: 0 };
-          swipeAccumRef.current = { dx: 0, dy: 0 };
-          burstLockRef.current = false;
+          lastGestureRef.current = { dx: 0, dy: 0 };
         },
         onPanResponderMove: (_, g) => {
-          const ddx = g.dx - gestureLastRef.current.dx;
-          const ddy = g.dy - gestureLastRef.current.dy;
-          gestureLastRef.current = { dx: g.dx, dy: g.dy };
+          if (gestureModeRef.current !== 'camera') return;
 
-          if (gestureModeRef.current === 'camera') {
-            cameraTargetRef.current.yaw = clamp(cameraTargetRef.current.yaw + ddx * 0.43, -150, 150);
-            cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch - ddy * 0.28, 18, 38);
-            return;
-          }
+          const ddx = g.dx - lastGestureRef.current.dx;
+          const ddy = g.dy - lastGestureRef.current.dy;
+          lastGestureRef.current = { dx: g.dx, dy: g.dy };
 
-          swipeAccumRef.current.dx += ddx;
-          swipeAccumRef.current.dy += ddy;
-
-          const a = swipeAccumRef.current;
-          if (Math.abs(a.dx) > 18 && Math.abs(a.dx) > Math.abs(a.dy) * 0.72) {
-            pushCube(a.dx > 0 ? 1 : -1, 0, clamp(0.56 + Math.abs(a.dx) / 120, 0.56, 1.2));
-            a.dx = 0;
-            a.dy *= 0.3;
-          }
-
-          if (a.dy < -24 && Math.abs(a.dy) > Math.abs(a.dx) * 1.06 && !burstLockRef.current) {
-            burstForward(1.0);
-            burstLockRef.current = true;
-            a.dy = 0;
-          }
-
-          if (a.dy > -8) burstLockRef.current = false;
+          cameraTargetRef.current.yaw = clamp(cameraTargetRef.current.yaw + ddx * 0.42, -155, 155);
+          cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch - ddy * 0.27, 18, 38);
         },
-        onPanResponderRelease: () => {
+        onPanResponderRelease: (_, g) => {
+          if (gestureModeRef.current === 'move') {
+            const dx = g.dx;
+            const dy = g.dy;
+            if (Math.hypot(dx, dy) > 16) {
+              const yaw = THREE.MathUtils.degToRad(cameraStateRef.current.yaw);
+              const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+              const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+
+              if (Math.abs(dx) > Math.abs(dy)) {
+                tryRoll(dx > 0 ? right : right.clone().multiplyScalar(-1));
+              } else {
+                tryRoll(dy < 0 ? fwd : fwd.clone().multiplyScalar(-1));
+              }
+            }
+          }
+
           gestureModeRef.current = null;
-          gestureLastRef.current = { dx: 0, dy: 0 };
-          swipeAccumRef.current = { dx: 0, dy: 0 };
-          burstLockRef.current = false;
+          lastGestureRef.current = { dx: 0, dy: 0 };
         },
         onPanResponderTerminate: () => {
           gestureModeRef.current = null;
-          gestureLastRef.current = { dx: 0, dy: 0 };
-          swipeAccumRef.current = { dx: 0, dy: 0 };
-          burstLockRef.current = false;
+          lastGestureRef.current = { dx: 0, dy: 0 };
         },
       }),
-    [burstForward, pushCube]
+    [tryRoll]
   );
 
   useEffect(() => {
@@ -339,21 +340,24 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         event.preventDefault();
       }
 
-      if (key === 'a') return void pushCube(-1, 0, 0.8);
-      if (key === 'd') return void pushCube(1, 0, 0.8);
-      if (key === 'w') return void pushCube(0, 1, 0.86);
-      if (key === 's') return void pushCube(0, -1, 0.72);
-      if (key === ' ') return void burstForward(1.22);
+      const yaw = THREE.MathUtils.degToRad(cameraStateRef.current.yaw);
+      const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+      const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
 
-      if (key === 'arrowleft') cameraTargetRef.current.yaw = clamp(cameraTargetRef.current.yaw - 5, -150, 150);
-      if (key === 'arrowright') cameraTargetRef.current.yaw = clamp(cameraTargetRef.current.yaw + 5, -150, 150);
+      if (key === 'a') return void tryRoll(right.clone().multiplyScalar(-1));
+      if (key === 'd') return void tryRoll(right);
+      if (key === 'w' || key === ' ') return void tryRoll(fwd);
+      if (key === 's') return void tryRoll(fwd.clone().multiplyScalar(-1));
+
+      if (key === 'arrowleft') cameraTargetRef.current.yaw = clamp(cameraTargetRef.current.yaw - 5, -155, 155);
+      if (key === 'arrowright') cameraTargetRef.current.yaw = clamp(cameraTargetRef.current.yaw + 5, -155, 155);
       if (key === 'arrowup') cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch - 4, 18, 38);
       if (key === 'arrowdown') cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch + 4, 18, 38);
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [burstForward, pushCube]);
+  }, [tryRoll]);
 
   const onContextCreate = async (gl: any) => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -366,86 +370,92 @@ function CubeLab({ onBack }: { onBack: () => void }) {
     renderer.setClearColor(0x08152a, 1);
 
     const scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(0x08152a, 10, 30);
+    scene.fog = new THREE.Fog(0x08152a, 11, 35);
 
     const camera = new THREE.PerspectiveCamera(
-      58,
+      64,
       gl.drawingBufferWidth / gl.drawingBufferHeight,
       0.1,
-      100
+      120
     );
 
-    const hemi = new THREE.HemisphereLight(0xbfd8ff, 0x10203f, 0.85);
+    const hemi = new THREE.HemisphereLight(0xc8deff, 0x0f2042, 0.9);
     scene.add(hemi);
 
-    const key = new THREE.DirectionalLight(0xfff4de, 1.25);
-    key.position.set(6, 9, 6);
+    const key = new THREE.DirectionalLight(0xfff2db, 1.3);
+    key.position.set(7, 10, 6);
     key.castShadow = true;
     key.shadow.mapSize.width = 1024;
     key.shadow.mapSize.height = 1024;
     key.shadow.camera.near = 1;
-    key.shadow.camera.far = 24;
-    key.shadow.camera.left = -8;
-    key.shadow.camera.right = 8;
-    key.shadow.camera.top = 8;
-    key.shadow.camera.bottom = -8;
+    key.shadow.camera.far = 30;
+    key.shadow.camera.left = -9;
+    key.shadow.camera.right = 9;
+    key.shadow.camera.top = 9;
+    key.shadow.camera.bottom = -9;
     scene.add(key);
 
-    const rim = new THREE.PointLight(0x78aeff, 0.64, 30);
-    rim.position.set(-7, 4, -6);
+    const rim = new THREE.PointLight(0x73a8ff, 0.62, 36);
+    rim.position.set(-8, 4, -7);
     scene.add(rim);
 
     const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(34, 34),
-      new THREE.MeshStandardMaterial({ color: 0x1b2f53, roughness: 0.95, metalness: 0.04 })
+      new THREE.PlaneGeometry(36, 36),
+      new THREE.MeshStandardMaterial({ color: 0x1b2f53, roughness: 0.94, metalness: 0.03 })
     );
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = 0;
     floor.receiveShadow = true;
     scene.add(floor);
 
-    const grid = new THREE.GridHelper(32, 36, 0x7fa6db, 0x35588c);
-    grid.position.y = 0.02;
-    (grid.material as THREE.Material).transparent = true;
-    (grid.material as THREE.Material).opacity = 0.32;
+    const grid = new THREE.GridHelper(34, 36, 0x7fa6db, 0x35588c);
+    grid.position.y = FLOOR_Y;
+    const gm = grid.material as THREE.Material;
+    gm.transparent = true;
+    gm.opacity = 0.34;
     scene.add(grid);
 
-    const cubeMaterial = new THREE.MeshPhysicalMaterial({
+    const blockMaterial = new THREE.MeshPhysicalMaterial({
       color: 0xf6edd8,
-      roughness: 0.56,
+      roughness: 0.55,
       metalness: 0.01,
-      clearcoat: 0.42,
-      clearcoatRoughness: 0.3,
-      sheen: 0.24,
+      clearcoat: 0.45,
+      clearcoatRoughness: 0.28,
+      sheen: 0.25,
       sheenColor: new THREE.Color(0xf9f1df),
-      specularIntensity: 0.35,
+      specularIntensity: 0.38,
     });
 
-    const cube = new THREE.Mesh(new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE), cubeMaterial);
-    cube.castShadow = true;
-    cube.receiveShadow = false;
-    cube.position.set(0, 0.93, 0);
-    scene.add(cube);
+    const block = new THREE.Mesh(
+      new THREE.BoxGeometry(BLOCK_SIZE.x, BLOCK_SIZE.y, BLOCK_SIZE.z),
+      blockMaterial
+    );
+    block.castShadow = true;
+    block.receiveShadow = false;
+    const state = blockStateRef.current;
+    block.position.copy(state.pos);
+    block.quaternion.copy(state.quat);
+    scene.add(block);
 
     const contactShadow = new THREE.Mesh(
-      new THREE.CircleGeometry(0.96, 34),
-      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.26 })
+      new THREE.CircleGeometry(Math.max(HALF.x, HALF.z) * 0.92, 36),
+      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.24 })
     );
     contactShadow.rotation.x = -Math.PI / 2;
-    contactShadow.position.set(0, 0.01, 0);
+    contactShadow.position.set(state.pos.x, FLOOR_Y, state.pos.z);
     scene.add(contactShadow);
 
     rendererRef.current = renderer;
     sceneRef.current = scene;
     cameraRef.current = camera;
-    cubeRef.current = cube;
+    blockRef.current = block;
     shadowRef.current = contactShadow;
 
     const animate = (ts: number) => {
       const r = rendererRef.current;
       const s = sceneRef.current;
       const c = cameraRef.current;
-      const cubeMesh = cubeRef.current;
+      const cubeMesh = blockRef.current;
       const contact = shadowRef.current;
       if (!r || !s || !c || !cubeMesh || !contact) return;
 
@@ -453,132 +463,68 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       const dt = Math.min(0.033, (ts - lastTsRef.current) / 1000);
       lastTsRef.current = ts;
 
-      const m = motionRef.current;
+      const stateNow = blockStateRef.current;
+      const roll = rollRef.current;
 
-      m.x += m.vx * dt;
-      m.z += m.vz * dt;
+      if (roll) {
+        roll.elapsed += dt;
+        const t = clamp(roll.elapsed / roll.duration, 0, 1);
+        const eased = easeInOut(t);
 
-      m.vx *= Math.exp(-dt * 3.7);
-      m.vz *= Math.exp(-dt * 3.7);
+        const qDelta = new THREE.Quaternion().setFromAxisAngle(roll.axis, eased * Math.PI * 0.5);
 
-      if (m.x > ARENA_HALF) {
-        m.x = ARENA_HALF;
-        m.vx *= -0.35;
-        m.spinZ += 2.5;
-        playSploosh(0.7);
-      }
-      if (m.x < -ARENA_HALF) {
-        m.x = -ARENA_HALF;
-        m.vx *= -0.35;
-        m.spinZ -= 2.5;
-        playSploosh(0.7);
-      }
-      if (m.z > ARENA_HALF) {
-        m.z = ARENA_HALF;
-        m.vz *= -0.35;
-        m.spinX += 2.5;
-        playSploosh(0.7);
-      }
-      if (m.z < -ARENA_HALF) {
-        m.z = -ARENA_HALF;
-        m.vz *= -0.35;
-        m.spinX -= 2.5;
-        playSploosh(0.7);
-      }
+        stateNow.pos.copy(roll.fromPos).sub(roll.pivot).applyQuaternion(qDelta).add(roll.pivot);
+        stateNow.quat.copy(qDelta).multiply(roll.fromQuat).normalize();
 
-      m.spinX += m.vz * dt * 2.9;
-      m.spinZ += -m.vx * dt * 2.9;
-
-      m.spinX *= Math.exp(-dt * 2.2);
-      m.spinY *= Math.exp(-dt * 2.5);
-      m.spinZ *= Math.exp(-dt * 2.2);
-
-      m.rx += m.spinX * dt;
-      m.ry += m.spinY * dt;
-      m.rz += m.spinZ * dt;
-
-      m.hopVy -= 13.5 * dt;
-      m.hop += m.hopVy * dt;
-      if (m.hop < 0) {
-        if (m.hopVy < -2.8) playSploosh(0.82);
-        m.hop = 0;
-        m.hopVy = 0;
-      }
-
-      m.squish = lerp(m.squish, 1, Math.min(1, dt * 8));
-
-      const speed = Math.hypot(m.vx, m.vz);
-
-      const scaleX = 1 / m.squish;
-      const scaleY = m.squish;
-      const scaleZ = 1 / m.squish;
-      const half = CUBE_SIZE * 0.5;
-
-      const corner = new THREE.Vector3();
-      const euler = new THREE.Euler(m.rx, m.ry, m.rz, 'XYZ');
-      let minCornerY = Infinity;
-
-      for (const sx of [-1, 1]) {
-        for (const sy of [-1, 1]) {
-          for (const sz of [-1, 1]) {
-            corner.set(sx * half * scaleX, sy * half * scaleY, sz * half * scaleZ);
-            corner.applyEuler(euler);
-            if (corner.y < minCornerY) minCornerY = corner.y;
-          }
+        if (t >= 1) {
+          stateNow.pos.y = restingCenterY(stateNow.quat);
+          stateNow.pos.x = clamp(stateNow.pos.x, -ARENA_HALF, ARENA_HALF);
+          stateNow.pos.z = clamp(stateNow.pos.z, -ARENA_HALF, ARENA_HALF);
+          rollRef.current = null;
         }
       }
 
-      let cubeCenterY = 0.01 + m.hop;
-      const floorClearance = cubeCenterY + minCornerY;
-      if (floorClearance < 0.01) {
-        cubeCenterY += 0.01 - floorClearance;
-      }
+      cubeMesh.position.copy(stateNow.pos);
+      cubeMesh.quaternion.copy(stateNow.quat);
 
-      cubeMesh.position.set(m.x, cubeCenterY, m.z);
-      cubeMesh.rotation.set(m.rx, m.ry, m.rz);
-      cubeMesh.scale.set(scaleX, scaleY, scaleZ);
-
-      contact.position.set(m.x, 0.01, m.z);
-      const shScale = 1 + speed * 0.06;
-      contact.scale.set(shScale, shScale, 1);
-      (contact.material as THREE.MeshBasicMaterial).opacity = clamp(
-        0.30 - Math.max(0, floorClearance) * 0.26,
-        0.06,
-        0.30
-      );
+      contact.position.set(stateNow.pos.x, FLOOR_Y, stateNow.pos.z);
+      const shadowScale = rollRef.current ? 1.08 : 1;
+      contact.scale.set(shadowScale, shadowScale, 1);
+      (contact.material as THREE.MeshBasicMaterial).opacity = rollRef.current ? 0.2 : 0.26;
 
       const cameraTarget = cameraTargetRef.current;
       const cameraState = cameraStateRef.current;
-      const cameraFollow = cameraFollowRef.current;
+      const follow = cameraFollowRef.current;
 
       cameraState.yaw = lerp(cameraState.yaw, cameraTarget.yaw, Math.min(1, dt * 16));
       cameraState.pitch = lerp(cameraState.pitch, cameraTarget.pitch, Math.min(1, dt * 16));
 
-      cameraFollow.x = lerp(cameraFollow.x, m.x, Math.min(1, dt * 16));
-      cameraFollow.z = lerp(cameraFollow.z, m.z, Math.min(1, dt * 16));
-      cameraFollow.y = lerp(cameraFollow.y, cubeCenterY, Math.min(1, dt * 16));
+      follow.x = lerp(follow.x, stateNow.pos.x, Math.min(1, dt * 16));
+      follow.z = lerp(follow.z, stateNow.pos.z, Math.min(1, dt * 16));
+      follow.y = lerp(follow.y, stateNow.pos.y, Math.min(1, dt * 16));
 
       const yaw = THREE.MathUtils.degToRad(cameraState.yaw);
       const pitch = THREE.MathUtils.degToRad(cameraState.pitch);
 
-      const boundRadius = Math.sqrt(3) * half * Math.max(scaleX, scaleY, scaleZ);
+      const boundRadius = Math.sqrt(HALF.x * HALF.x + HALF.y * HALF.y + HALF.z * HALF.z);
       const vFov = THREE.MathUtils.degToRad(c.fov);
       const aspect = c.aspect || (gl.drawingBufferWidth / gl.drawingBufferHeight);
       const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
+
       const fitDistance =
         Math.max(
           boundRadius / Math.tan(vFov / 2),
-          boundRadius / Math.tan(Math.max(0.2, hFov / 2))
-        ) * 1.4;
+          boundRadius / Math.tan(Math.max(0.18, hFov / 2))
+        ) * 1.72;
 
-      const radius = Math.max(9.6 + speed * 0.14, fitDistance * 1.08);
+      const radius = Math.max(9.8, fitDistance);
 
-      const cx = cameraFollow.x + Math.sin(yaw) * Math.cos(pitch) * radius;
-      const cy = Math.max(2.5, cameraFollow.y + 1.55 + Math.sin(pitch) * radius * 0.78);
-      const cz = cameraFollow.z + Math.cos(yaw) * Math.cos(pitch) * radius;
+      const cx = follow.x + Math.sin(yaw) * Math.cos(pitch) * radius;
+      const cy = follow.y + 1.6 + Math.sin(pitch) * radius * 0.74;
+      const cz = follow.z + Math.cos(yaw) * Math.cos(pitch) * radius;
 
       c.position.set(cx, cy, cz);
-      c.lookAt(cameraFollow.x, cameraFollow.y, cameraFollow.z);
+      c.lookAt(follow.x, follow.y, follow.z);
 
       const drawW = gl.drawingBufferWidth;
       const drawH = gl.drawingBufferHeight;
@@ -593,10 +539,15 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       gl.endFrameEXP();
 
       if (ts - lastHudRef.current > 120) {
+        const prev = prevPosForSpeedRef.current;
+        const dist = prev.distanceTo(stateNow.pos);
+        prev.copy(stateNow.pos);
+        const approxSpeed = dist / Math.max(0.001, dt);
+
         lastHudRef.current = ts;
         setHud({
-          speed: speed.toFixed(2),
-          cam: `${Math.round(cameraStateRef.current.yaw)}°`,
+          speed: approxSpeed.toFixed(2),
+          cam: `${Math.round(cameraState.yaw)}°`,
         });
       }
 
@@ -613,7 +564,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       rendererRef.current = null;
       sceneRef.current = null;
       cameraRef.current = null;
-      cubeRef.current = null;
+      blockRef.current = null;
       shadowRef.current = null;
     };
   }, []);
@@ -632,7 +583,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       </View>
 
       <View style={styles.objectiveRow}>
-        <Text style={styles.objective}>Real 3D cube. Swipe to move, rotate, and burst. ({BUILD_TAG})</Text>
+        <Text style={styles.objective}>Rect cream-cheese block. Face-roll movement. ({BUILD_TAG})</Text>
       </View>
 
       <View style={styles.world}>
@@ -644,8 +595,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         </View>
 
         <View style={styles.tutorialWrap}>
-          <Text style={styles.tutorialText}>Phone: left swipe = move • right swipe = camera orbit</Text>
-          <Text style={styles.tutorialText}>Desktop: W/A/S/D move • Space burst • arrows camera</Text>
+          <Text style={styles.tutorialText}>Phone: left swipe rolls block • right swipe orbits camera</Text>
+          <Text style={styles.tutorialText}>Desktop: W/A/S/D rolls • arrows camera • Space forward roll</Text>
         </View>
       </View>
     </View>
