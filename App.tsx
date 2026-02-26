@@ -203,6 +203,8 @@ function CubeSandbox({ onBack }: { onBack: () => void }) {
 
   const gestureModeRef = useRef<'move' | 'camera' | null>(null);
   const gestureLastRef = useRef({ dx: 0, dy: 0 });
+  const moveSwipeAccumRef = useRef({ dx: 0, dy: 0 });
+  const moveBurstLockRef = useRef(false);
 
   const trailRef = useRef<Particle[]>([]);
   const nextTrailIdRef = useRef(1);
@@ -214,8 +216,8 @@ function CubeSandbox({ onBack }: { onBack: () => void }) {
 
   const floorPoints = useMemo(() => {
     const points: Array<{ x: number; z: number; parity: number }> = [];
-    for (let gx = -11; gx <= 11; gx++) {
-      for (let gz = -11; gz <= 11; gz++) {
+    for (let gx = -7; gx <= 7; gx++) {
+      for (let gz = -7; gz <= 7; gz++) {
         points.push({ x: gx * 0.9, z: gz * 0.9, parity: Math.abs(gx + gz) % 2 });
       }
     }
@@ -240,8 +242,8 @@ function CubeSandbox({ onBack }: { onBack: () => void }) {
       });
     }
 
-    if (trailRef.current.length > 320) {
-      trailRef.current.splice(0, trailRef.current.length - 320);
+    if (trailRef.current.length > 150) {
+      trailRef.current.splice(0, trailRef.current.length - 150);
     }
   };
 
@@ -291,44 +293,80 @@ function CubeSandbox({ onBack }: { onBack: () => void }) {
           const x = evt.nativeEvent.locationX;
           gestureModeRef.current = x > SCREEN_WIDTH * 0.54 ? 'camera' : 'move';
           gestureLastRef.current = { dx: 0, dy: 0 };
+          moveSwipeAccumRef.current = { dx: 0, dy: 0 };
+          moveBurstLockRef.current = false;
         },
         onPanResponderMove: (_, g) => {
-          if (gestureModeRef.current !== 'camera') return;
-
           const ddx = g.dx - gestureLastRef.current.dx;
           const ddy = g.dy - gestureLastRef.current.dy;
           gestureLastRef.current = { dx: g.dx, dy: g.dy };
 
-          cameraYawRef.current = clamp(cameraYawRef.current + ddx * 0.43, -140, 140);
-          cameraPitchRef.current = clamp(cameraPitchRef.current - ddy * 0.25, 8, 56);
-          forceRender((n) => (n + 1) % 1000000);
+          if (gestureModeRef.current === 'camera') {
+            cameraYawRef.current = clamp(cameraYawRef.current + ddx * 0.43, -140, 140);
+            cameraPitchRef.current = clamp(cameraPitchRef.current - ddy * 0.25, 8, 56);
+            forceRender((n) => (n + 1) % 1000000);
+            return;
+          }
+
+          if (gestureModeRef.current === 'move') {
+            moveSwipeAccumRef.current.dx += ddx;
+            moveSwipeAccumRef.current.dy += ddy;
+
+            const accum = moveSwipeAccumRef.current;
+
+            const horizontalTrigger =
+              Math.abs(accum.dx) > 20 && Math.abs(accum.dx) > Math.abs(accum.dy) * 0.75;
+
+            if (horizontalTrigger) {
+              const dir = accum.dx > 0 ? 1 : -1;
+              const mag = clamp(0.62 + Math.abs(accum.dx) / 110, 0.62, 1.2);
+              applyImpulse(dir, 0, mag);
+              accum.dx = 0;
+              accum.dy *= 0.3;
+            }
+
+            const verticalTrigger =
+              accum.dy < -26 && Math.abs(accum.dy) > Math.abs(accum.dx) * 1.05;
+
+            if (verticalTrigger && !moveBurstLockRef.current) {
+              applyImpulse(0, 1, 1.0);
+              showToast('Up-swipe burst', 0.52);
+              moveBurstLockRef.current = true;
+              accum.dy = 0;
+            }
+
+            if (accum.dy > -8) {
+              moveBurstLockRef.current = false;
+            }
+          }
         },
         onPanResponderRelease: (_, g) => {
           if (gestureModeRef.current === 'move') {
-            const dx = g.dx;
-            const dy = g.dy;
+            const dx = moveSwipeAccumRef.current.dx;
+            const dy = moveSwipeAccumRef.current.dy;
 
             const dist = Math.hypot(dx, dy);
-            if (dist > 18) {
-              const mag = clamp(dist / 210, 0.45, 1.65);
+            if (dist > 16) {
+              const mag = clamp(dist / 240, 0.34, 1.1);
               applyImpulse(dx, -dy, mag);
             }
 
-            if (dy < -28 && Math.abs(dy) > Math.abs(dx) * 1.12) {
-              cubeVelRef.current.x += Math.sin((cameraYawRef.current * Math.PI) / 180) * 3.8;
-              cubeVelRef.current.z += Math.cos((cameraYawRef.current * Math.PI) / 180) * 3.8;
-              cubeAngVelRef.current.x += 2.4;
-              playSploosh(1.08);
-              showToast('Up-swipe burst', 0.62);
+            if (g.dy < -32 && Math.abs(g.dy) > Math.abs(g.dx) * 1.12 && !moveBurstLockRef.current) {
+              applyImpulse(0, 1, 1.04);
+              showToast('Up-swipe burst', 0.58);
             }
           }
 
           gestureModeRef.current = null;
           gestureLastRef.current = { dx: 0, dy: 0 };
+          moveSwipeAccumRef.current = { dx: 0, dy: 0 };
+          moveBurstLockRef.current = false;
         },
         onPanResponderTerminate: () => {
           gestureModeRef.current = null;
           gestureLastRef.current = { dx: 0, dy: 0 };
+          moveSwipeAccumRef.current = { dx: 0, dy: 0 };
+          moveBurstLockRef.current = false;
         },
       }),
     []
@@ -454,7 +492,7 @@ function CubeSandbox({ onBack }: { onBack: () => void }) {
       cameraYawKickRef.current *= Math.exp(-dt * 3.1);
 
       // Ambient cream specks while moving
-      if (speed > 0.32 && Math.random() < 0.33) {
+      if (speed > 0.32 && Math.random() < 0.16) {
         trailRef.current.push({
           id: nextTrailIdRef.current++,
           x: SCREEN_WIDTH / 2 + (Math.random() - 0.5) * 50,
@@ -533,8 +571,7 @@ function CubeSandbox({ onBack }: { onBack: () => void }) {
       if (!p || p.z2 > 120) return null;
       return { ...pt, p };
     })
-    .filter((v): v is { x: number; z: number; parity: number; p: NonNullable<ReturnType<typeof project>> } => !!v)
-    .sort((a, b) => b.p.z2 - a.p.z2);
+    .filter((v): v is { x: number; z: number; parity: number; p: NonNullable<ReturnType<typeof project>> } => !!v);
 
   const cubeProjection = project(pos.x, CUBE_HALF, pos.z);
   const shadowProjection = project(pos.x, 0.01, pos.z);
