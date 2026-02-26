@@ -8,13 +8,19 @@
 npm run eas:login
 ```
 
-2. Link this project to Expo (creates project ID in app config):
+2. Confirm you are logged into the correct Expo account (`jhtylerhall`):
+
+```bash
+npx eas-cli whoami
+```
+
+3. Link this project to Expo (creates project ID in app config under `expo.extra.eas.projectId`):
 
 ```bash
 npm run eas:init
 ```
 
-3. Commit the changes from `eas init` (it may update app.json/app.config).
+4. Commit the changes from `eas init` (it may update app.json/app.config).
 
 ## Build binaries (cloud build)
 

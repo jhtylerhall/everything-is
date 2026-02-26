@@ -2,20 +2,34 @@
   "expo": {
     "name": "cream-cheese-platformer-expo",
     "slug": "cream-cheese-platformer-expo",
+    "owner": "jhtylerhall",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
+    "platforms": [
+      "ios",
+      "android",
+      "web"
+    ],
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.jhtylerhall.creamcheeseplatformer",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
+      "package": "com.jhtylerhall.creamcheeseplatformer",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -25,6 +39,14 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "9b3ef737-64e7-4215-82dc-3420816f43d0"
+      }
+    },
+    "updates": {
+      "url": "https://u.expo.dev/9b3ef737-64e7-4215-82dc-3420816f43d0"
     }
   }
 }

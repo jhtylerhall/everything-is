@@ -4,15 +4,25 @@
     "appVersionSource": "remote"
   },
   "build": {
+    "base": {
+      "node": "20.11.1"
+    },
     "development": {
+      "extends": "base",
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "channel": "development"
     },
     "preview": {
-      "distribution": "internal"
+      "extends": "base",
+      "distribution": "internal",
+      "channel": "preview"
     },
     "production": {
-      "autoIncrement": true
+      "extends": "base",
+      "autoIncrement": true,
+      "distribution": "store",
+      "channel": "production"
     }
   },
   "submit": {
