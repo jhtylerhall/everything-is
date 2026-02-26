@@ -208,8 +208,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
     squish: 1,
   });
 
-  const cameraTargetRef = useRef({ yaw: 24, pitch: 22 });
-  const cameraStateRef = useRef({ yaw: 24, pitch: 22 });
+  const cameraTargetRef = useRef({ yaw: 18, pitch: 24 });
+  const cameraStateRef = useRef({ yaw: 18, pitch: 24 });
   const cameraFollowRef = useRef({ x: 0, z: 0, y: 0.93 });
 
   const gestureModeRef = useRef<'move' | 'camera' | null>(null);
@@ -220,7 +220,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
   const lastTsRef = useRef(0);
   const lastHudRef = useRef(0);
 
-  const [hud, setHud] = useState({ speed: '0.00', cam: '24°' });
+  const [hud, setHud] = useState({ speed: '0.00', cam: '18°' });
 
   const pushCube = useCallback((lateral: number, forward: number, strength: number) => {
     const motion = motionRef.current;
@@ -275,7 +275,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
 
           if (gestureModeRef.current === 'camera') {
             cameraTargetRef.current.yaw = clamp(cameraTargetRef.current.yaw + ddx * 0.43, -150, 150);
-            cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch - ddy * 0.28, 10, 52);
+            cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch - ddy * 0.28, 14, 42);
             return;
           }
 
@@ -346,8 +346,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
 
       if (key === 'arrowleft') cameraTargetRef.current.yaw = clamp(cameraTargetRef.current.yaw - 5, -150, 150);
       if (key === 'arrowright') cameraTargetRef.current.yaw = clamp(cameraTargetRef.current.yaw + 5, -150, 150);
-      if (key === 'arrowup') cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch - 4, 10, 52);
-      if (key === 'arrowdown') cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch + 4, 10, 52);
+      if (key === 'arrowup') cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch - 4, 14, 42);
+      if (key === 'arrowdown') cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch + 4, 14, 42);
     };
 
     window.addEventListener('keydown', onKeyDown);
@@ -369,7 +369,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
     scene.fog = new THREE.Fog(0x08152a, 10, 30);
 
     const camera = new THREE.PerspectiveCamera(
-      50,
+      58,
       gl.drawingBufferWidth / gl.drawingBufferHeight,
       0.1,
       100
@@ -421,7 +421,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       specularIntensity: 0.35,
     });
 
-    const cube = new THREE.Mesh(new THREE.BoxGeometry(1.85, 1.85, 1.85), cubeMaterial);
+    const cube = new THREE.Mesh(new THREE.BoxGeometry(1.65, 1.65, 1.65), cubeMaterial);
     cube.castShadow = true;
     cube.receiveShadow = false;
     cube.position.set(0, 0.93, 0);
@@ -510,7 +510,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       const speed = Math.hypot(m.vx, m.vz);
 
       const cubeScaleY = m.squish;
-      const cubeCenterY = 0.925 * cubeScaleY + 0.01 + m.hop;
+      const dynamicLift = (Math.abs(Math.sin(m.rx)) + Math.abs(Math.sin(m.rz))) * 0.22;
+      const cubeCenterY = 0.825 * cubeScaleY + 0.01 + m.hop + dynamicLift;
 
       cubeMesh.position.set(m.x, cubeCenterY, m.z);
       cubeMesh.rotation.set(m.rx, m.ry, m.rz);
@@ -519,29 +520,33 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       contact.position.set(m.x, 0.01, m.z);
       const shScale = 1 + speed * 0.06;
       contact.scale.set(shScale, shScale, 1);
-      (contact.material as THREE.MeshBasicMaterial).opacity = clamp(0.28 - m.hop * 0.17, 0.08, 0.28);
+      (contact.material as THREE.MeshBasicMaterial).opacity = clamp(
+        0.30 - (m.hop + dynamicLift) * 0.2,
+        0.06,
+        0.30
+      );
 
       const cameraTarget = cameraTargetRef.current;
       const cameraState = cameraStateRef.current;
       const cameraFollow = cameraFollowRef.current;
 
-      cameraState.yaw = lerp(cameraState.yaw, cameraTarget.yaw, Math.min(1, dt * 10));
-      cameraState.pitch = lerp(cameraState.pitch, cameraTarget.pitch, Math.min(1, dt * 10));
+      cameraState.yaw = lerp(cameraState.yaw, cameraTarget.yaw, Math.min(1, dt * 14));
+      cameraState.pitch = lerp(cameraState.pitch, cameraTarget.pitch, Math.min(1, dt * 14));
 
-      cameraFollow.x = lerp(cameraFollow.x, m.x, Math.min(1, dt * 8));
-      cameraFollow.z = lerp(cameraFollow.z, m.z, Math.min(1, dt * 8));
-      cameraFollow.y = lerp(cameraFollow.y, cubeCenterY, Math.min(1, dt * 8));
+      cameraFollow.x = lerp(cameraFollow.x, m.x, Math.min(1, dt * 14));
+      cameraFollow.z = lerp(cameraFollow.z, m.z, Math.min(1, dt * 14));
+      cameraFollow.y = lerp(cameraFollow.y, cubeCenterY, Math.min(1, dt * 14));
 
       const yaw = THREE.MathUtils.degToRad(cameraState.yaw);
       const pitch = THREE.MathUtils.degToRad(cameraState.pitch);
-      const radius = 6.4 + speed * 0.08;
+      const radius = 8.4 + speed * 0.12;
 
       const cx = cameraFollow.x + Math.sin(yaw) * Math.cos(pitch) * radius;
-      const cy = Math.max(2.1, cameraFollow.y + 1.15 + Math.sin(pitch) * radius * 0.85);
+      const cy = Math.max(2.35, cameraFollow.y + 1.45 + Math.sin(pitch) * radius * 0.78);
       const cz = cameraFollow.z + Math.cos(yaw) * Math.cos(pitch) * radius;
 
       c.position.set(cx, cy, cz);
-      c.lookAt(cameraFollow.x, cameraFollow.y + 0.32, cameraFollow.z);
+      c.lookAt(m.x, cubeCenterY + 0.2, m.z);
 
       r.render(s, c);
       gl.endFrameEXP();
@@ -747,7 +752,7 @@ const styles = StyleSheet.create({
   },
   tutorialWrap: {
     position: 'absolute',
-    top: 12,
+    bottom: 12,
     alignSelf: 'center',
     backgroundColor: 'rgba(4,10,20,0.66)',
     borderWidth: 1,
