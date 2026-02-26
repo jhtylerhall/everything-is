@@ -42,7 +42,7 @@ type Gate = {
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-const BUILD_TAG = 'world-align-5';
+const BUILD_TAG = 'world-align-6';
 
 const FLOOR_Y = 0.01;
 const ARENA_HALF = 14.5;
@@ -355,7 +355,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
   const gestureModeRef = useRef<'move' | 'camera' | null>(null);
   const lastGestureRef = useRef({ dx: 0, dy: 0 });
 
-  const [hud, setHud] = useState({ speed: '0.00', cam: '8°' });
+  const [hud, setHud] = useState({ speed: '0.00', cam: '8°', axis: 'Z', face: 'N' });
   const [toast, setToast] = useState('');
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastHudRef = useRef(0);
@@ -816,6 +816,29 @@ function CubeLab({ onBack }: { onBack: () => void }) {
     );
     block.castShadow = true;
     block.receiveShadow = false;
+
+    // Front-face identifier so orientation intent is always obvious.
+    const frontStamp = new THREE.Mesh(
+      new THREE.PlaneGeometry(BLOCK_SIZE.x * 0.48, BLOCK_SIZE.y * 0.34),
+      new THREE.MeshStandardMaterial({
+        color: 0xff7a48,
+        emissive: 0x552515,
+        emissiveIntensity: 0.34,
+        roughness: 0.4,
+        metalness: 0.02,
+      })
+    );
+    frontStamp.position.set(0, 0.02, HALF.z + 0.002);
+    block.add(frontStamp);
+
+    const frontArrow = new THREE.Mesh(
+      new THREE.ConeGeometry(0.11, 0.24, 3),
+      new THREE.MeshStandardMaterial({ color: 0xffa05f, emissive: 0x4a240f, emissiveIntensity: 0.28 })
+    );
+    frontArrow.position.set(0, HALF.y + 0.07, HALF.z * 0.22);
+    frontArrow.rotation.x = Math.PI / 2;
+    block.add(frontArrow);
+
     const state = blockStateRef.current;
     block.position.copy(state.pos);
     block.quaternion.copy(state.quat);
@@ -913,7 +936,9 @@ function CubeLab({ onBack }: { onBack: () => void }) {
             showToast(`${gate.id.toUpperCase()} unlocked`);
             playSploosh(0.95);
           } else {
-            showToast(`Marker alignment wrong for ${gate.id.toUpperCase()}`);
+            showToast(
+              `${gate.id.toUpperCase()} needs Axis ${gate.triggerAxis.toUpperCase()} + low profile`
+            );
           }
         }
       }
@@ -978,10 +1003,25 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         prev.copy(stateNow.pos);
         const approxSpeed = dist / Math.max(0.001, dt);
 
+        const extNow = blockHalfExtents(stateNow.quat);
+        const axisNow: 'X' | 'Z' = extNow.x >= extNow.z ? 'X' : 'Z';
+
+        const front = quantizeToCardinalXZ(new THREE.Vector3(0, 0, 1).applyQuaternion(stateNow.quat));
+        const face =
+          Math.abs(front.x) > Math.abs(front.z)
+            ? front.x > 0
+              ? 'E'
+              : 'W'
+            : front.z > 0
+              ? 'S'
+              : 'N';
+
         lastHudRef.current = ts;
         setHud({
           speed: approxSpeed.toFixed(2),
           cam: `${Math.round(cameraState.yaw)}°`,
+          axis: axisNow,
+          face,
         });
       }
 
@@ -1017,6 +1057,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         <View style={styles.hudRight}>
           <HudChip label="Speed" value={hud.speed} />
           <HudChip label="Cam" value={hud.cam} />
+          <HudChip label="Axis" value={hud.axis} />
+          <HudChip label="Front" value={hud.face} />
         </View>
       </View>
 
@@ -1035,6 +1077,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         <View style={styles.tutorialWrap}>
           <Text style={styles.tutorialText}>Phone: swipe up rolls down • swipe down rolls up • right side orbits camera</Text>
           <Text style={styles.tutorialText}>Desktop: A/D side roll • W back • S/Space forward • arrows camera</Text>
+          <Text style={styles.tutorialText}>Orange stamp + arrow = front of cream cheese block.</Text>
           <Text style={styles.tutorialText}>Marker footprint matches block size; snap onto it with right orientation to unlock.</Text>
           <Text style={styles.tutorialText}>Buildings are hard boundaries at the world edge.</Text>
         </View>
