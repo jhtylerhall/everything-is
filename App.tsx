@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import * as THREE from 'three';
 
-type Screen = 'menu' | 'game';
+type Screen = 'menu' | 'game' | 'gameover';
 
 type RollAnim = {
   fromPos: THREE.Vector3;
@@ -43,6 +43,7 @@ type Gate = {
 type GateDoorVisual = {
   door: THREE.Mesh;
   beam?: THREE.Mesh;
+  completionArrow?: THREE.Mesh;
   closedY: number;
   openY: number;
   openness: number;
@@ -50,14 +51,16 @@ type GateDoorVisual = {
   indicators: THREE.Mesh[];
 };
 
+type FaceKey = 'px' | 'nx' | 'py' | 'ny' | 'pz' | 'nz';
+
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-const BUILD_TAG = 'world-align-18';
+const BUILD_TAG = 'world-align-29';
 
 const FLOOR_Y = 0.01;
-const ARENA_HALF = 14.5;
+const ARENA_HALF = 20;
 const GRID_STEP = 0.5;
-const MARKER_SNAP_RADIUS = 0.78;
+const MARKER_SNAP_RADIUS = 0.92;
 const BOUNDARY_MARGIN = 0.5;
 const GATE_THICKNESS = 0.8;
 const GATE_HEIGHT = 3.4;
@@ -82,33 +85,72 @@ const GATES: Gate[] = [
     triggerZ: -1.0,
     triggerAxis: 'z',
     triggerMaxHalfY: 0.52,
-    tip: 'Align to the floor marker to open Gate 1.',
+    tip: 'Intro: one-flip setup.',
   },
   {
     id: 'gate-2',
     axis: 'z',
-    at: -9.6,
+    at: -9.0,
     gapCenter: 2.5,
-    gapWidth: 3.8,
-    clearance: 1.95,
-    triggerX: 0.5,
-    triggerZ: -6.3,
+    gapWidth: 2.3,
+    clearance: 1.35,
+    triggerX: 1.0,
+    triggerZ: -6.5,
     triggerAxis: 'x',
-    triggerMaxHalfY: 0.8,
-    tip: 'Align long-side X on the marker to open Gate 2.',
+    triggerMaxHalfY: 0.72,
+    tip: 'Orientation shift: long-side X.',
   },
   {
     id: 'gate-3',
     axis: 'x',
-    at: 4.5,
-    gapCenter: -12.0,
-    gapWidth: 1.5,
-    clearance: 1.32,
-    triggerX: 2.0,
-    triggerZ: -11.0,
+    at: 5.8,
+    gapCenter: -10.2,
+    gapWidth: 1.6,
+    clearance: 1.3,
+    triggerX: 3.8,
+    triggerZ: -9.8,
     triggerAxis: 'z',
-    triggerMaxHalfY: 0.65,
-    tip: 'Final marker: align cleanly to unlock the phone lane.',
+    triggerMaxHalfY: 0.62,
+    tip: 'Tighter landing chain.',
+  },
+  {
+    id: 'gate-4',
+    axis: 'z',
+    at: -14.0,
+    gapCenter: 7.0,
+    gapWidth: 1.5,
+    clearance: 1.28,
+    triggerX: 6.6,
+    triggerZ: -12.2,
+    triggerAxis: 'x',
+    triggerMaxHalfY: 0.6,
+    tip: 'Late-mid orientation precision.',
+  },
+  {
+    id: 'gate-5',
+    axis: 'x',
+    at: 11.5,
+    gapCenter: -16.2,
+    gapWidth: 1.4,
+    clearance: 1.25,
+    triggerX: 9.0,
+    triggerZ: -15.0,
+    triggerAxis: 'z',
+    triggerMaxHalfY: 0.58,
+    tip: 'Punishing chain, low tolerance.',
+  },
+  {
+    id: 'gate-6',
+    axis: 'z',
+    at: -18.0,
+    gapCenter: 10.5,
+    gapWidth: 1.35,
+    clearance: 1.2,
+    triggerX: 10.2,
+    triggerZ: -17.2,
+    triggerAxis: 'x',
+    triggerMaxHalfY: 0.56,
+    tip: 'Final conversion gate.',
   },
 ];
 
@@ -126,6 +168,22 @@ function lerp(a: number, b: number, t: number) {
 
 function snapToGrid(v: number) {
   return Math.round(v / GRID_STEP) * GRID_STEP;
+}
+
+function snapYawTo90(deg: number) {
+  return Math.round(deg / 90) * 90;
+}
+
+function localDownFaceKey(q: THREE.Quaternion): FaceKey {
+  const inv = q.clone().invert();
+  const localDown = new THREE.Vector3(0, -1, 0).applyQuaternion(inv);
+  if (Math.abs(localDown.x) >= Math.abs(localDown.y) && Math.abs(localDown.x) >= Math.abs(localDown.z)) {
+    return localDown.x >= 0 ? 'px' : 'nx';
+  }
+  if (Math.abs(localDown.y) >= Math.abs(localDown.x) && Math.abs(localDown.y) >= Math.abs(localDown.z)) {
+    return localDown.y >= 0 ? 'py' : 'ny';
+  }
+  return localDown.z >= 0 ? 'pz' : 'nz';
 }
 
 function easeInOut(t: number) {
@@ -319,7 +377,8 @@ export default function App() {
   return (
     <SafeAreaView style={styles.safe}>
       {screen === 'menu' && <MainMenu onStart={() => setScreen('game')} />}
-      {screen === 'game' && <CubeLab onBack={() => setScreen('menu')} />}
+      {screen === 'game' && <CubeLab onBack={() => setScreen('menu')} onGameOver={() => setScreen('gameover')} />}
+      {screen === 'gameover' && <GameOverScreen onRestart={() => setScreen('game')} onMenu={() => setScreen('menu')} />}
       <StatusBar style="light" />
     </SafeAreaView>
   );
@@ -331,19 +390,30 @@ function MainMenu({ onStart }: { onStart: () => void }) {
       <View style={styles.menuOrbA} />
       <View style={styles.menuOrbB} />
 
-      <Text style={styles.kicker}>JOSH BLOCK: HEADSPACE</Text>
-      <Text style={styles.title}>Cream Cheese Open World</Text>
-      <Text style={styles.copyCenter}>Navigate inside Josh Block's mind-city and become a phone.</Text>
-      <Text style={styles.copyCenter}>Align on floor markers to unlock gates. City buildings mark hard boundaries.</Text>
+      <Text style={styles.title}>Josh’s Block</Text>
 
       <Pressable style={styles.menuButtonPrimary} onPress={onStart}>
-        <Text style={styles.menuButtonPrimaryText}>Start Run</Text>
+        <Text style={styles.menuButtonPrimaryText}>Start</Text>
       </Pressable>
     </View>
   );
 }
 
-function CubeLab({ onBack }: { onBack: () => void }) {
+function GameOverScreen({ onRestart, onMenu }: { onRestart: () => void; onMenu: () => void }) {
+  return (
+    <View style={styles.menuWrap}>
+      <Text style={styles.title}>You’re just a block of cream cheese.</Text>
+      <Pressable style={styles.menuButtonPrimary} onPress={onRestart}>
+        <Text style={styles.menuButtonPrimaryText}>Restart</Text>
+      </Pressable>
+      <Pressable style={styles.menuButtonGhost} onPress={onMenu}>
+        <Text style={styles.menuButtonGhostText}>Menu</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function CubeLab({ onBack, onGameOver }: { onBack: () => void; onGameOver: () => void }) {
   const rendererRef = useRef<any>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
@@ -351,7 +421,11 @@ function CubeLab({ onBack }: { onBack: () => void }) {
   const shadowRef = useRef<THREE.Mesh | null>(null);
   const gateDoorRefs = useRef<Record<string, GateDoorVisual>>({});
   const gateTriggerRefs = useRef<Record<string, THREE.Object3D>>({});
+  const gateTriggerPosRefs = useRef<Record<string, { x: number; z: number }>>({});
   const activatedGatesRef = useRef<Set<string>>(new Set());
+  const phoneFaceSetRef = useRef<Set<FaceKey>>(new Set());
+  const phoneFaceOverlaysRef = useRef<Record<FaceKey, THREE.Mesh | null>>({ px: null, nx: null, py: null, ny: null, pz: null, nz: null });
+  const hpRef = useRef(100);
   const rafRef = useRef<number | null>(null);
 
   const blockStateRef = useRef({
@@ -369,7 +443,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
   const gestureModeRef = useRef<'move' | 'camera' | null>(null);
   const lastGestureRef = useRef({ dx: 0, dy: 0 });
 
-  const [hud, setHud] = useState({ speed: '0.00', cam: '8°', axis: 'Z', face: 'N' });
+  const [hud, setHud] = useState({ speed: '0.00', cam: '8°', axis: 'Z', face: 'N', gate: '0/6', target: 'G1', hp: '100', form: '0/6' });
   const [toast, setToast] = useState('');
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastHudRef = useRef(0);
@@ -385,6 +459,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
   const queueCameraTurn = useCallback((dir: -1 | 1) => {
     pendingTurnRef.current += dir;
   }, []);
+
+  const phoneFaceOrder: FaceKey[] = ['pz', 'nz', 'px', 'nx', 'py', 'ny'];
 
   const tryRoll = useCallback((dirWorld: THREE.Vector3) => {
     if (rollRef.current) return;
@@ -524,8 +600,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       if (key === 'w') return void tryRoll(fwd.clone().multiplyScalar(-1));
       if (key === 's' || key === ' ') return void tryRoll(fwd);
 
-      if (key === 'arrowleft') cameraTargetRef.current.yaw -= 5;
-      if (key === 'arrowright') cameraTargetRef.current.yaw += 5;
+      if (key === 'arrowleft') cameraTargetRef.current.yaw = snapYawTo90(cameraTargetRef.current.yaw - 90);
+      if (key === 'arrowright') cameraTargetRef.current.yaw = snapYawTo90(cameraTargetRef.current.yaw + 90);
       if (key === 'arrowup') cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch - 4, 18, 38);
       if (key === 'arrowdown') cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch + 4, 18, 38);
     };
@@ -662,22 +738,25 @@ function CubeLab({ onBack }: { onBack: () => void }) {
 
     gateDoorRefs.current = {};
     gateTriggerRefs.current = {};
+    gateTriggerPosRefs.current = {};
     activatedGatesRef.current = new Set();
+    phoneFaceSetRef.current = new Set();
+    hpRef.current = 100;
 
     // Expanded second-level play plaza for better flow after Gate 1.
     const level2Pad = new THREE.Mesh(
-      new THREE.BoxGeometry(14, 0.14, 10),
+      new THREE.BoxGeometry(18, 0.14, 14),
       new THREE.MeshStandardMaterial({ color: 0x21385c, roughness: 0.72, metalness: 0.1 })
     );
-    level2Pad.position.set(3.2, FLOOR_Y + 0.07, -9.4);
+    level2Pad.position.set(4.2, FLOOR_Y + 0.07, -11.8);
     level2Pad.receiveShadow = true;
     scene.add(level2Pad);
 
     const level2Inset = new THREE.Mesh(
-      new THREE.BoxGeometry(11.5, 0.04, 7.5),
+      new THREE.BoxGeometry(15, 0.04, 11),
       new THREE.MeshStandardMaterial({ color: 0x2d5384, roughness: 0.4, metalness: 0.18, emissive: 0x0d1d34, emissiveIntensity: 0.45 })
     );
-    level2Inset.position.set(3.2, FLOOR_Y + 0.1, -9.4);
+    level2Inset.position.set(4.2, FLOOR_Y + 0.1, -11.8);
     level2Inset.receiveShadow = true;
     scene.add(level2Inset);
 
@@ -697,6 +776,31 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       scene.add(left);
       scene.add(right);
       return [left, right];
+    };
+
+    const makeCompletionArrow = (x: number, z: number, axis: 'x' | 'z') => {
+      const shape = new THREE.Shape();
+      shape.moveTo(-0.42, -0.12);
+      shape.lineTo(0.05, -0.12);
+      shape.lineTo(0.05, -0.24);
+      shape.lineTo(0.42, 0);
+      shape.lineTo(0.05, 0.24);
+      shape.lineTo(0.05, 0.12);
+      shape.lineTo(-0.42, 0.12);
+      shape.closePath();
+
+      const arrow = new THREE.Mesh(
+        new THREE.ShapeGeometry(shape),
+        new THREE.MeshStandardMaterial({ color: 0x3ddc84, emissive: 0x1a7a4b, emissiveIntensity: 0.85, roughness: 0.35 })
+      );
+      arrow.rotation.x = -Math.PI / 2;
+      if (axis === 'z') arrow.rotation.z = Math.PI / 2;
+      arrow.position.set(x, FLOOR_Y + 0.04, z);
+      arrow.visible = false;
+      arrow.castShadow = false;
+      arrow.receiveShadow = false;
+      scene.add(arrow);
+      return arrow;
     };
 
     for (const gate of GATES) {
@@ -751,6 +855,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         gateDoorRefs.current[gate.id] = {
           door,
           beam,
+          completionArrow: gate.id === 'gate-2' ? makeCompletionArrow(gate.gapCenter, gate.at, gate.axis) : undefined,
           closedY: gate.clearance * 0.5,
           openY: -gate.clearance * 0.72,
           openness: 0,
@@ -806,6 +911,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         gateDoorRefs.current[gate.id] = {
           door,
           beam,
+          completionArrow: gate.id === 'gate-2' ? makeCompletionArrow(gate.at, gate.gapCenter, gate.axis) : undefined,
           closedY: gate.clearance * 0.5,
           openY: -gate.clearance * 0.72,
           openness: 0,
@@ -915,6 +1021,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       triggerGroup.add(beacon);
       scene.add(triggerGroup);
       gateTriggerRefs.current[gate.id] = triggerGroup;
+      gateTriggerPosRefs.current[gate.id] = { x: gate.triggerX, z: gate.triggerZ };
     }
 
     // Phone destination marker in world.
@@ -922,24 +1029,24 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       new THREE.BoxGeometry(0.9, 1.8, 0.16),
       new THREE.MeshStandardMaterial({ color: 0x0f1523, roughness: 0.35, metalness: 0.12 })
     );
-    phone.position.set(6.8, 1.0, -12.2);
+    phone.position.set(13.8, 1.0, -18.4);
     phone.castShadow = true;
     phone.receiveShadow = true;
     scene.add(phone);
 
     const phoneGlow = new THREE.PointLight(0x6fb1ff, 0.7, 8);
-    phoneGlow.position.set(6.8, 1.9, -12.2);
+    phoneGlow.position.set(13.8, 1.9, -18.4);
     scene.add(phoneGlow);
 
     const blockMaterial = new THREE.MeshPhysicalMaterial({
-      color: 0xf6edd8,
-      roughness: 0.55,
-      metalness: 0.01,
-      clearcoat: 0.45,
-      clearcoatRoughness: 0.28,
-      sheen: 0.25,
-      sheenColor: new THREE.Color(0xf9f1df),
-      specularIntensity: 0.38,
+      color: 0xe7ddd1,
+      roughness: 0.4,
+      metalness: 0.08,
+      clearcoat: 0.82,
+      clearcoatRoughness: 0.18,
+      sheen: 0.55,
+      sheenColor: new THREE.Color(0xf7f3eb),
+      specularIntensity: 0.62,
     });
 
     const block = new THREE.Mesh(
@@ -970,6 +1077,73 @@ function CubeLab({ onBack }: { onBack: () => void }) {
     frontArrow.position.set(0, HALF.y + 0.07, HALF.z * 0.22);
     frontArrow.rotation.x = Math.PI / 2;
     block.add(frontArrow);
+
+    // Cream cheese wrapper accents (foil seam + blue print strips).
+    const foilBand = new THREE.Mesh(
+      new THREE.BoxGeometry(BLOCK_SIZE.x * 0.98, BLOCK_SIZE.y * 0.36, BLOCK_SIZE.z * 0.98),
+      new THREE.MeshPhysicalMaterial({
+        color: 0xd8d4cf,
+        roughness: 0.28,
+        metalness: 0.55,
+        clearcoat: 0.9,
+        clearcoatRoughness: 0.12,
+      })
+    );
+    foilBand.position.set(0, HALF.y * 0.37, 0);
+    block.add(foilBand);
+
+    const printMat = new THREE.MeshStandardMaterial({ color: 0xd8d5cf, emissive: 0x4b4844, emissiveIntensity: 0.06 });
+    const printTop = new THREE.Mesh(new THREE.PlaneGeometry(BLOCK_SIZE.x * 0.68, BLOCK_SIZE.z * 0.2), printMat);
+    printTop.rotation.x = -Math.PI / 2;
+    printTop.position.set(0, HALF.y + 0.002, 0);
+    block.add(printTop);
+
+    const makePhoneOverlay = (key: FaceKey) => {
+      const m = new THREE.MeshStandardMaterial({
+        color: 0x111418,
+        roughness: 0.2,
+        metalness: 0.25,
+        emissive: 0x050608,
+        emissiveIntensity: 0.2,
+      });
+      const pad = 0.06;
+      let mesh: THREE.Mesh;
+      if (key === 'px' || key === 'nx') mesh = new THREE.Mesh(new THREE.PlaneGeometry(BLOCK_SIZE.z - pad, BLOCK_SIZE.y - pad), m);
+      else if (key === 'py' || key === 'ny') mesh = new THREE.Mesh(new THREE.PlaneGeometry(BLOCK_SIZE.x - pad, BLOCK_SIZE.z - pad), m);
+      else mesh = new THREE.Mesh(new THREE.PlaneGeometry(BLOCK_SIZE.x - pad, BLOCK_SIZE.y - pad), m);
+
+      if (key === 'px') {
+        mesh.position.set(HALF.x + 0.002, 0, 0);
+        mesh.rotation.y = -Math.PI / 2;
+      } else if (key === 'nx') {
+        mesh.position.set(-HALF.x - 0.002, 0, 0);
+        mesh.rotation.y = Math.PI / 2;
+      } else if (key === 'py') {
+        mesh.position.set(0, HALF.y + 0.002, 0);
+        mesh.rotation.x = -Math.PI / 2;
+      } else if (key === 'ny') {
+        mesh.position.set(0, -HALF.y - 0.002, 0);
+        mesh.rotation.x = Math.PI / 2;
+      } else if (key === 'pz') {
+        mesh.position.set(0, 0, HALF.z + 0.002);
+      } else {
+        mesh.position.set(0, 0, -HALF.z - 0.002);
+        mesh.rotation.y = Math.PI;
+      }
+
+      mesh.visible = false;
+      block.add(mesh);
+      return mesh;
+    };
+
+    phoneFaceOverlaysRef.current = {
+      px: makePhoneOverlay('px'),
+      nx: makePhoneOverlay('nx'),
+      py: makePhoneOverlay('py'),
+      ny: makePhoneOverlay('ny'),
+      pz: makePhoneOverlay('pz'),
+      nz: makePhoneOverlay('nz'),
+    };
 
     const state = blockStateRef.current;
     block.position.copy(state.pos);
@@ -1022,8 +1196,28 @@ function CubeLab({ onBack }: { onBack: () => void }) {
           stateNow.pos.y = restingCenterY(stateNow.quat);
           stateNow.pos.x = clamp(stateNow.pos.x, -ARENA_HALF, ARENA_HALF);
           stateNow.pos.z = clamp(stateNow.pos.z, -ARENA_HALF, ARENA_HALF);
+
+          const downFace = localDownFaceKey(stateNow.quat);
+          if (phoneFaceSetRef.current.has(downFace)) {
+            const damage = 10 + phoneFaceSetRef.current.size * 2;
+            hpRef.current = Math.max(0, hpRef.current - damage);
+            playSploosh(1.05);
+            if (hpRef.current <= 0) {
+              onGameOver();
+              return;
+            }
+          }
+
           rollRef.current = null;
         }
+      }
+
+      // Static markers: difficulty now ramps via orientation pathing, not moving platforms.
+      for (const gate of GATES) {
+        const trigger = gateTriggerRefs.current[gate.id];
+        if (!trigger) continue;
+        trigger.position.set(0, 0, 0);
+        gateTriggerPosRefs.current[gate.id] = { x: gate.triggerX, z: gate.triggerZ };
       }
 
       if (!rollRef.current) {
@@ -1033,26 +1227,38 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         for (const gate of GATES) {
           if (activatedGatesRef.current.has(gate.id)) continue;
 
-          const dx = stateNow.pos.x - gate.triggerX;
-          const dz = stateNow.pos.z - gate.triggerZ;
+          const triggerPos = gateTriggerPosRefs.current[gate.id] ?? { x: gate.triggerX, z: gate.triggerZ };
+          const dx = stateNow.pos.x - triggerPos.x;
+          const dz = stateNow.pos.z - triggerPos.z;
           const markerDist = Math.hypot(dx, dz);
 
-          if (markerDist > MARKER_SNAP_RADIUS) continue;
-
-          // Snap to exact marker tile once close, so puzzle is tile-exact and not finicky.
-          stateNow.pos.x = gate.triggerX;
-          stateNow.pos.z = gate.triggerZ;
-          stateNow.pos.y = restingCenterY(stateNow.quat);
+          const proximityRadius = gate.id === 'gate-1' ? 0.88 : gate.id === 'gate-2' ? 0.9 : 0.92;
+          if (markerDist > proximityRadius) continue;
 
           const orientationOk = horizontalAxis === gate.triggerAxis;
-          const heightOk = ext.y <= gate.triggerMaxHalfY;
+          const heightOk = ext.y <= gate.triggerMaxHalfY + (gate.id === 'gate-3' ? 0.06 : 0);
 
-          if (orientationOk && heightOk) {
+          // Strict flush checks with tiny moving-platform leniency for FP jitter.
+          const baseAxisTol = gate.id === 'gate-1' ? 0.12 : gate.id === 'gate-2' ? 0.14 : 0.16;
+          const movingJitterAllowance = gate.id === 'gate-1' ? 0 : 0.015;
+          const axisTol = baseAxisTol + movingJitterAllowance;
+          const positionOk = Math.abs(dx) <= axisTol && Math.abs(dz) <= axisTol;
+
+          if (orientationOk && heightOk && positionOk) {
+            // Lock flush to marker center on success, including moving gates.
+            stateNow.pos.x = triggerPos.x;
+            stateNow.pos.z = triggerPos.z;
+            stateNow.pos.y = restingCenterY(stateNow.quat);
+
             activatedGatesRef.current.add(gate.id);
 
             const doorVisual = gateDoorRefs.current[gate.id];
             if (doorVisual) {
               doorVisual.targetOpenness = 1;
+              if (gate.id === 'gate-2') {
+                for (const indicator of doorVisual.indicators) indicator.visible = false;
+                if (doorVisual.completionArrow) doorVisual.completionArrow.visible = true;
+              }
             }
 
             const trigger = gateTriggerRefs.current[gate.id];
@@ -1067,20 +1273,30 @@ function CubeLab({ onBack }: { onBack: () => void }) {
               });
             }
 
-            if (gate.id === 'gate-1') {
-              const gate2 = GATES.find((g) => g.id === 'gate-2');
-              if (gate2) {
-                const toX = gate2.triggerX - stateNow.pos.x;
-                const toZ = gate2.triggerZ - stateNow.pos.z;
-                const targetYaw = THREE.MathUtils.radToDeg(Math.atan2(toX, toZ));
-                cameraSnapRef.current = {
-                  startYaw: cameraStateRef.current.yaw,
-                  endYaw: targetYaw,
-                  elapsed: 0,
-                  duration: 0.34,
-                };
-                cameraTargetRef.current.pitch = 24;
-              }
+            const nextFace = phoneFaceOrder.find((f) => !phoneFaceSetRef.current.has(f));
+            if (nextFace) {
+              phoneFaceSetRef.current.add(nextFace);
+              const overlay = phoneFaceOverlaysRef.current[nextFace];
+              if (overlay) overlay.visible = true;
+            }
+
+            const gateIdx = GATES.findIndex((g) => g.id === gate.id);
+            const nextGate = gateIdx >= 0 ? GATES[gateIdx + 1] : undefined;
+            const nextTarget = nextGate
+              ? gateTriggerPosRefs.current[nextGate.id]
+              : { x: 13.8, z: -18.4 };
+
+            if (nextTarget) {
+              const toX = nextTarget.x - stateNow.pos.x;
+              const toZ = nextTarget.z - stateNow.pos.z;
+              const targetYaw = snapYawTo90(THREE.MathUtils.radToDeg(Math.atan2(toX, toZ)));
+              cameraSnapRef.current = {
+                startYaw: cameraStateRef.current.yaw,
+                endYaw: targetYaw,
+                elapsed: 0,
+                duration: 0.36,
+              };
+              cameraTargetRef.current.pitch = nextGate ? 24 : 22;
             }
 
             playSploosh(0.95);
@@ -1237,11 +1453,16 @@ function CubeLab({ onBack }: { onBack: () => void }) {
               : 'N';
 
         lastHudRef.current = ts;
+        const nextGate = GATES.find((g) => !activatedGatesRef.current.has(g.id));
         setHud({
           speed: approxSpeed.toFixed(2),
           cam: `${((Math.round(cameraState.yaw) % 360) + 360) % 360}°`,
           axis: axisNow,
           face,
+          gate: `${activatedGatesRef.current.size}/${GATES.length}`,
+          target: nextGate ? nextGate.id.toUpperCase().replace('-', '') : 'PHONE',
+          hp: `${hpRef.current}`,
+          form: `${phoneFaceSetRef.current.size}/6`,
         });
       }
 
@@ -1263,7 +1484,11 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       shadowRef.current = null;
       gateDoorRefs.current = {};
       gateTriggerRefs.current = {};
+      gateTriggerPosRefs.current = {};
       activatedGatesRef.current = new Set();
+      phoneFaceSetRef.current = new Set();
+      phoneFaceOverlaysRef.current = { px: null, nx: null, py: null, ny: null, pz: null, nz: null };
+      hpRef.current = 100;
       cameraSnapRef.current = null;
       pendingTurnRef.current = 0;
     };
@@ -1277,16 +1502,12 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         </Pressable>
 
         <View style={styles.hudRight}>
-          <HudChip label="Speed" value={hud.speed} />
-          <HudChip label="Cam" value={hud.cam} />
-          <HudChip label="Axis" value={hud.axis} />
-          <HudChip label="Front" value={hud.face} />
+          <HudChip label="HP" value={hud.hp} />
+          <HudChip label="Target" value={hud.target} />
+          <HudChip label="Form" value={hud.form} />
         </View>
       </View>
 
-      <View style={styles.objectiveRow}>
-        <Text style={styles.objective}>Josh Block headspace: tile-locked rolling, align on markers to unlock gates. ({BUILD_TAG})</Text>
-      </View>
 
       <View style={styles.world}>
         <GLView style={StyleSheet.absoluteFill} onContextCreate={onContextCreate} />
@@ -1383,6 +1604,15 @@ const styles = StyleSheet.create({
     borderColor: '#98e2ff',
   },
   menuButtonPrimaryText: { color: '#061220', fontWeight: '800', fontSize: 18 },
+  menuButtonGhost: {
+    backgroundColor: 'transparent',
+    paddingHorizontal: 28,
+    paddingVertical: 12,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: '#40618f',
+  },
+  menuButtonGhostText: { color: '#d7e8ff', fontWeight: '700', fontSize: 16 },
 
   gameWrap: { flex: 1, backgroundColor: '#060d1b', padding: 10 },
   hudTop: {
