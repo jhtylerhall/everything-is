@@ -40,9 +40,19 @@ type Gate = {
   tip: string;
 };
 
+type GateDoorVisual = {
+  door: THREE.Mesh;
+  beam?: THREE.Mesh;
+  closedY: number;
+  openY: number;
+  openness: number;
+  targetOpenness: number;
+  indicators: THREE.Mesh[];
+};
+
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-const BUILD_TAG = 'world-align-7';
+const BUILD_TAG = 'world-align-18';
 
 const FLOOR_Y = 0.01;
 const ARENA_HALF = 14.5;
@@ -51,6 +61,8 @@ const MARKER_SNAP_RADIUS = 0.78;
 const BOUNDARY_MARGIN = 0.5;
 const GATE_THICKNESS = 0.8;
 const GATE_HEIGHT = 3.4;
+const RAIL_HEIGHT = 0.42;
+const RAIL_THICKNESS = 0.18;
 const BLOCK_SIZE = { x: 1.45, y: 0.9, z: 2.25 };
 const HALF = {
   x: BLOCK_SIZE.x / 2,
@@ -75,12 +87,12 @@ const GATES: Gate[] = [
   {
     id: 'gate-2',
     axis: 'z',
-    at: -8.5,
-    gapCenter: 3.0,
-    gapWidth: 1.5,
-    clearance: 1.85,
-    triggerX: 1.0,
-    triggerZ: -6.0,
+    at: -9.6,
+    gapCenter: 2.5,
+    gapWidth: 3.8,
+    clearance: 1.95,
+    triggerX: 0.5,
+    triggerZ: -6.3,
     triggerAxis: 'x',
     triggerMaxHalfY: 0.8,
     tip: 'Align long-side X on the marker to open Gate 2.',
@@ -337,7 +349,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const blockRef = useRef<THREE.Mesh | null>(null);
   const shadowRef = useRef<THREE.Mesh | null>(null);
-  const gateDoorRefs = useRef<Record<string, THREE.Mesh>>({});
+  const gateDoorRefs = useRef<Record<string, GateDoorVisual>>({});
   const gateTriggerRefs = useRef<Record<string, THREE.Object3D>>({});
   const activatedGatesRef = useRef<Set<string>>(new Set());
   const rafRef = useRef<number | null>(null);
@@ -351,6 +363,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
   const cameraTargetRef = useRef({ yaw: 8, pitch: 28 });
   const cameraStateRef = useRef({ yaw: 8, pitch: 28 });
   const cameraFollowRef = useRef({ x: 0, z: 0, y: HALF.y + FLOOR_Y });
+  const cameraSnapRef = useRef<{ startYaw: number; endYaw: number; elapsed: number; duration: number } | null>(null);
+  const pendingTurnRef = useRef(0);
 
   const gestureModeRef = useRef<'move' | 'camera' | null>(null);
   const lastGestureRef = useRef({ dx: 0, dy: 0 });
@@ -366,6 +380,10 @@ function CubeLab({ onBack }: { onBack: () => void }) {
     setToast(text);
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     toastTimerRef.current = setTimeout(() => setToast(''), ms);
+  }, []);
+
+  const queueCameraTurn = useCallback((dir: -1 | 1) => {
+    pendingTurnRef.current += dir;
   }, []);
 
   const tryRoll = useCallback((dirWorld: THREE.Vector3) => {
@@ -435,19 +453,13 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       PanResponder.create({
         onStartShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 3 || Math.abs(g.dy) > 3,
-        onPanResponderGrant: (evt) => {
-          gestureModeRef.current = evt.nativeEvent.locationX > SCREEN_WIDTH * 0.52 ? 'camera' : 'move';
+        onPanResponderGrant: () => {
+          // Movement only. Camera rotation is handled by explicit on-screen buttons.
+          gestureModeRef.current = 'move';
           lastGestureRef.current = { dx: 0, dy: 0 };
         },
-        onPanResponderMove: (_, g) => {
-          if (gestureModeRef.current !== 'camera') return;
-
-          const ddx = g.dx - lastGestureRef.current.dx;
-          const ddy = g.dy - lastGestureRef.current.dy;
-          lastGestureRef.current = { dx: g.dx, dy: g.dy };
-
-          cameraTargetRef.current.yaw = clamp(cameraTargetRef.current.yaw + ddx * 0.42, -155, 155);
-          cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch - ddy * 0.27, 18, 38);
+        onPanResponderMove: () => {
+          // no-op: movement resolves on release via swipe direction
         },
         onPanResponderRelease: (_, g) => {
           if (gestureModeRef.current === 'move') {
@@ -512,8 +524,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       if (key === 'w') return void tryRoll(fwd.clone().multiplyScalar(-1));
       if (key === 's' || key === ' ') return void tryRoll(fwd);
 
-      if (key === 'arrowleft') cameraTargetRef.current.yaw = clamp(cameraTargetRef.current.yaw - 5, -155, 155);
-      if (key === 'arrowright') cameraTargetRef.current.yaw = clamp(cameraTargetRef.current.yaw + 5, -155, 155);
+      if (key === 'arrowleft') cameraTargetRef.current.yaw -= 5;
+      if (key === 'arrowright') cameraTargetRef.current.yaw += 5;
       if (key === 'arrowup') cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch - 4, 18, 38);
       if (key === 'arrowdown') cameraTargetRef.current.pitch = clamp(cameraTargetRef.current.pitch + 4, 18, 38);
     };
@@ -581,8 +593,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
     const boundaryMat = new THREE.MeshStandardMaterial({ color: 0x44566f, roughness: 0.9 });
     const boundaryTopMat = new THREE.MeshStandardMaterial({ color: 0x6f86a8, roughness: 0.55 });
 
-    const wallThickness = 0.7;
-    const wallHeight = 3.2;
+    const wallThickness = RAIL_THICKNESS;
+    const wallHeight = RAIL_HEIGHT;
 
     const northSouthGeo = new THREE.BoxGeometry(ARENA_HALF * 2 + wallThickness, wallHeight, wallThickness);
     const eastWestGeo = new THREE.BoxGeometry(wallThickness, wallHeight, ARENA_HALF * 2 + wallThickness);
@@ -636,15 +648,56 @@ function CubeLab({ onBack }: { onBack: () => void }) {
     }
 
     // Alignment puzzle gates + floor indicators that unlock each gate.
-    const gateMat = new THREE.MeshStandardMaterial({ color: 0x7f8ca0, roughness: 0.88 });
-    const gateBeamMat = new THREE.MeshStandardMaterial({ color: 0xb99963, roughness: 0.66 });
-    const gateDoorMat = new THREE.MeshStandardMaterial({ color: 0x4d5f7a, roughness: 0.82 });
+    const gateMat = new THREE.MeshStandardMaterial({ color: 0x6f7f93, roughness: 0.78, metalness: 0.2 });
+    const gateBeamMat = new THREE.MeshStandardMaterial({ color: 0xc9a86b, roughness: 0.45, metalness: 0.38 });
+    const gateDoorMat = new THREE.MeshStandardMaterial({
+      color: 0x2f3b4f,
+      roughness: 0.55,
+      metalness: 0.4,
+      emissive: 0x4b1e1e,
+      emissiveIntensity: 0.2,
+    });
     const triggerInactiveMat = new THREE.MeshStandardMaterial({ color: 0x6f5a39, roughness: 0.65 });
     const triggerOutlineMat = new THREE.MeshStandardMaterial({ color: 0x39a8ff, roughness: 0.42, metalness: 0.08 });
 
     gateDoorRefs.current = {};
     gateTriggerRefs.current = {};
     activatedGatesRef.current = new Set();
+
+    // Expanded second-level play plaza for better flow after Gate 1.
+    const level2Pad = new THREE.Mesh(
+      new THREE.BoxGeometry(14, 0.14, 10),
+      new THREE.MeshStandardMaterial({ color: 0x21385c, roughness: 0.72, metalness: 0.1 })
+    );
+    level2Pad.position.set(3.2, FLOOR_Y + 0.07, -9.4);
+    level2Pad.receiveShadow = true;
+    scene.add(level2Pad);
+
+    const level2Inset = new THREE.Mesh(
+      new THREE.BoxGeometry(11.5, 0.04, 7.5),
+      new THREE.MeshStandardMaterial({ color: 0x2d5384, roughness: 0.4, metalness: 0.18, emissive: 0x0d1d34, emissiveIntensity: 0.45 })
+    );
+    level2Inset.position.set(3.2, FLOOR_Y + 0.1, -9.4);
+    level2Inset.receiveShadow = true;
+    scene.add(level2Inset);
+
+    const makeGateIndicators = (x: number, z: number, alongX: boolean) => {
+      const left = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.12, 0.12, 0.34, 14),
+        new THREE.MeshStandardMaterial({ color: 0xff4d4d, emissive: 0x651818, emissiveIntensity: 0.75, roughness: 0.3 })
+      );
+      const right = left.clone();
+      if (alongX) {
+        left.position.set(x - 0.42, 0.2, z);
+        right.position.set(x + 0.42, 0.2, z);
+      } else {
+        left.position.set(x, 0.2, z - 0.42);
+        right.position.set(x, 0.2, z + 0.42);
+      }
+      scene.add(left);
+      scene.add(right);
+      return [left, right];
+    };
 
     for (const gate of GATES) {
       const halfWorld = ARENA_HALF;
@@ -656,10 +709,10 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         const leftW = Math.max(0, gapMin - -halfWorld);
         if (leftW > 0.04) {
           const left = new THREE.Mesh(
-            new THREE.BoxGeometry(leftW, GATE_HEIGHT, GATE_THICKNESS),
+            new THREE.BoxGeometry(leftW, RAIL_HEIGHT, GATE_THICKNESS),
             gateMat
           );
-          left.position.set((-halfWorld + gapMin) * 0.5, GATE_HEIGHT * 0.5, gate.at);
+          left.position.set((-halfWorld + gapMin) * 0.5, RAIL_HEIGHT * 0.5, gate.at);
           left.castShadow = true;
           left.receiveShadow = true;
           scene.add(left);
@@ -668,34 +721,42 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         const rightW = Math.max(0, halfWorld - gapMax);
         if (rightW > 0.04) {
           const right = new THREE.Mesh(
-            new THREE.BoxGeometry(rightW, GATE_HEIGHT, GATE_THICKNESS),
+            new THREE.BoxGeometry(rightW, RAIL_HEIGHT, GATE_THICKNESS),
             gateMat
           );
-          right.position.set((gapMax + halfWorld) * 0.5, GATE_HEIGHT * 0.5, gate.at);
+          right.position.set((gapMax + halfWorld) * 0.5, RAIL_HEIGHT * 0.5, gate.at);
           right.castShadow = true;
           right.receiveShadow = true;
           scene.add(right);
         }
 
-        const topH = Math.max(0.12, GATE_HEIGHT - gate.clearance);
+        const topH = 0.1;
         const beam = new THREE.Mesh(
-          new THREE.BoxGeometry(gate.gapWidth, topH, GATE_THICKNESS),
+          new THREE.BoxGeometry(gate.gapWidth, topH, GATE_THICKNESS * 0.46),
           gateBeamMat
         );
-        beam.position.set(gate.gapCenter, gate.clearance + topH * 0.5, gate.at);
+        beam.position.set(gate.gapCenter, RAIL_HEIGHT * 0.5, gate.at);
         beam.castShadow = true;
         beam.receiveShadow = true;
         scene.add(beam);
 
         const door = new THREE.Mesh(
           new THREE.BoxGeometry(gate.gapWidth, gate.clearance, GATE_THICKNESS * 0.94),
-          gateDoorMat
+          gateDoorMat.clone()
         );
         door.position.set(gate.gapCenter, gate.clearance * 0.5, gate.at);
         door.castShadow = true;
         door.receiveShadow = true;
         scene.add(door);
-        gateDoorRefs.current[gate.id] = door;
+        gateDoorRefs.current[gate.id] = {
+          door,
+          beam,
+          closedY: gate.clearance * 0.5,
+          openY: -gate.clearance * 0.72,
+          openness: 0,
+          targetOpenness: 0,
+          indicators: makeGateIndicators(gate.gapCenter, gate.at, true),
+        };
       } else {
         const gapMin = gate.gapCenter - gate.gapWidth * 0.5;
         const gapMax = gate.gapCenter + gate.gapWidth * 0.5;
@@ -703,10 +764,10 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         const nearW = Math.max(0, gapMin - -halfWorld);
         if (nearW > 0.04) {
           const near = new THREE.Mesh(
-            new THREE.BoxGeometry(GATE_THICKNESS, GATE_HEIGHT, nearW),
+            new THREE.BoxGeometry(GATE_THICKNESS, RAIL_HEIGHT, nearW),
             gateMat
           );
-          near.position.set(gate.at, GATE_HEIGHT * 0.5, (-halfWorld + gapMin) * 0.5);
+          near.position.set(gate.at, RAIL_HEIGHT * 0.5, (-halfWorld + gapMin) * 0.5);
           near.castShadow = true;
           near.receiveShadow = true;
           scene.add(near);
@@ -715,34 +776,42 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         const farW = Math.max(0, halfWorld - gapMax);
         if (farW > 0.04) {
           const far = new THREE.Mesh(
-            new THREE.BoxGeometry(GATE_THICKNESS, GATE_HEIGHT, farW),
+            new THREE.BoxGeometry(GATE_THICKNESS, RAIL_HEIGHT, farW),
             gateMat
           );
-          far.position.set(gate.at, GATE_HEIGHT * 0.5, (gapMax + halfWorld) * 0.5);
+          far.position.set(gate.at, RAIL_HEIGHT * 0.5, (gapMax + halfWorld) * 0.5);
           far.castShadow = true;
           far.receiveShadow = true;
           scene.add(far);
         }
 
-        const topH = Math.max(0.12, GATE_HEIGHT - gate.clearance);
+        const topH = 0.1;
         const beam = new THREE.Mesh(
-          new THREE.BoxGeometry(GATE_THICKNESS, topH, gate.gapWidth),
+          new THREE.BoxGeometry(GATE_THICKNESS * 0.46, topH, gate.gapWidth),
           gateBeamMat
         );
-        beam.position.set(gate.at, gate.clearance + topH * 0.5, gate.gapCenter);
+        beam.position.set(gate.at, RAIL_HEIGHT * 0.5, gate.gapCenter);
         beam.castShadow = true;
         beam.receiveShadow = true;
         scene.add(beam);
 
         const door = new THREE.Mesh(
           new THREE.BoxGeometry(GATE_THICKNESS * 0.94, gate.clearance, gate.gapWidth),
-          gateDoorMat
+          gateDoorMat.clone()
         );
         door.position.set(gate.at, gate.clearance * 0.5, gate.gapCenter);
         door.castShadow = true;
         door.receiveShadow = true;
         scene.add(door);
-        gateDoorRefs.current[gate.id] = door;
+        gateDoorRefs.current[gate.id] = {
+          door,
+          beam,
+          closedY: gate.clearance * 0.5,
+          openY: -gate.clearance * 0.72,
+          openness: 0,
+          targetOpenness: 0,
+          indicators: makeGateIndicators(gate.at, gate.gapCenter, false),
+        };
       }
 
       // Marker matches required block footprint (orientation only; either facing direction is valid).
@@ -765,23 +834,85 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       triggerOutline.castShadow = false;
       triggerOutline.receiveShadow = true;
 
-      // Axis stripe (no arrowhead) to avoid implying a required front-facing direction.
-      const axisStripe = new THREE.Mesh(
-        new THREE.BoxGeometry(
-          gate.triggerAxis === 'x' ? footprintX * 0.88 : 0.18,
-          0.035,
-          gate.triggerAxis === 'z' ? footprintZ * 0.88 : 0.18
-        ),
-        triggerOutlineMat.clone()
+      // Ground silhouette should match required footprint exactly (filled rectangle), plus elevated beacon.
+      const silhouetteFill = new THREE.Mesh(
+        new THREE.BoxGeometry(Math.max(0.2, footprintX - 0.06), 0.02, Math.max(0.2, footprintZ - 0.06)),
+        new THREE.MeshStandardMaterial({
+          color: gate.id === 'gate-2' ? 0x76dcff : 0x4ac6ff,
+          emissive: gate.id === 'gate-2' ? 0x2a86b4 : 0x1d6387,
+          emissiveIntensity: gate.id === 'gate-2' ? 0.92 : 0.72,
+          transparent: true,
+          opacity: gate.id === 'gate-2' ? 0.62 : 0.48,
+          roughness: 0.2,
+          metalness: 0.12,
+        })
       );
-      axisStripe.position.set(gate.triggerX, FLOOR_Y + 0.13, gate.triggerZ);
-      axisStripe.castShadow = false;
-      axisStripe.receiveShadow = true;
+      silhouetteFill.position.set(gate.triggerX, FLOOR_Y + 0.16, gate.triggerZ);
+      silhouetteFill.castShadow = false;
+      silhouetteFill.receiveShadow = false;
+      silhouetteFill.userData.preserveColor = true;
+
+      const silhouetteEdge = new THREE.Mesh(
+        new THREE.BoxGeometry(footprintX + 0.08, 0.024, footprintZ + 0.08),
+        new THREE.MeshStandardMaterial({
+          color: 0x9fe8ff,
+          emissive: 0x2f8fb8,
+          emissiveIntensity: 0.9,
+          roughness: 0.24,
+          metalness: 0.2,
+        })
+      );
+      silhouetteEdge.position.set(gate.triggerX, FLOOR_Y + 0.165, gate.triggerZ);
+      silhouetteEdge.castShadow = false;
+      silhouetteEdge.receiveShadow = false;
+      silhouetteEdge.userData.preserveColor = true;
+
+      const silhouetteGhost = new THREE.Mesh(
+        new THREE.BoxGeometry(footprintX + 0.04, 0.02, footprintZ + 0.04),
+        new THREE.MeshStandardMaterial({
+          color: 0x8fe3ff,
+          emissive: 0x3f99c6,
+          emissiveIntensity: gate.id === 'gate-1' ? 0.35 : 0.6,
+          transparent: true,
+          opacity: gate.id === 'gate-1' ? 0.14 : 0.24,
+          roughness: 0.2,
+          metalness: 0.1,
+        })
+      );
+      silhouetteGhost.position.set(
+        gate.triggerX,
+        FLOOR_Y + (gate.id === 'gate-1' ? 1.2 : gate.id === 'gate-2' ? 2.55 : 2.2),
+        gate.triggerZ
+      );
+      silhouetteGhost.castShadow = false;
+      silhouetteGhost.receiveShadow = false;
+      silhouetteGhost.userData.preserveColor = true;
+
+      const beacon = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.08, 0.16, gate.id === 'gate-2' ? 4.8 : 3.6, 10, 1, true),
+        new THREE.MeshStandardMaterial({
+          color: gate.id === 'gate-2' ? 0x8ee7ff : 0x66cbff,
+          emissive: gate.id === 'gate-2' ? 0x2f9dcc : 0x1d6b96,
+          emissiveIntensity: gate.id === 'gate-2' ? 0.95 : 0.55,
+          transparent: true,
+          opacity: gate.id === 'gate-2' ? 0.42 : 0.28,
+          roughness: 0.2,
+          metalness: 0.1,
+          side: THREE.DoubleSide,
+        })
+      );
+      beacon.position.set(gate.triggerX, FLOOR_Y + (gate.id === 'gate-2' ? 2.45 : 1.85), gate.triggerZ);
+      beacon.castShadow = false;
+      beacon.receiveShadow = false;
+      beacon.userData.preserveColor = true;
 
       const triggerGroup = new THREE.Group();
       triggerGroup.add(triggerBase);
       triggerGroup.add(triggerOutline);
-      triggerGroup.add(axisStripe);
+      triggerGroup.add(silhouetteEdge);
+      triggerGroup.add(silhouetteFill);
+      triggerGroup.add(silhouetteGhost);
+      triggerGroup.add(beacon);
       scene.add(triggerGroup);
       gateTriggerRefs.current[gate.id] = triggerGroup;
     }
@@ -919,8 +1050,10 @@ function CubeLab({ onBack }: { onBack: () => void }) {
           if (orientationOk && heightOk) {
             activatedGatesRef.current.add(gate.id);
 
-            const door = gateDoorRefs.current[gate.id];
-            if (door) door.visible = false;
+            const doorVisual = gateDoorRefs.current[gate.id];
+            if (doorVisual) {
+              doorVisual.targetOpenness = 1;
+            }
 
             const trigger = gateTriggerRefs.current[gate.id];
             if (trigger) {
@@ -930,17 +1063,74 @@ function CubeLab({ onBack }: { onBack: () => void }) {
                 if (!mat || !('color' in mat)) return;
                 mat.color.setHex(0x3fbf78);
                 mat.emissive = new THREE.Color(0x1e7a4a);
-                mat.emissiveIntensity = 0.45;
+                mat.emissiveIntensity = 0.55;
               });
             }
 
-            showToast(`${gate.id.toUpperCase()} unlocked`);
+            if (gate.id === 'gate-1') {
+              const gate2 = GATES.find((g) => g.id === 'gate-2');
+              if (gate2) {
+                const toX = gate2.triggerX - stateNow.pos.x;
+                const toZ = gate2.triggerZ - stateNow.pos.z;
+                const targetYaw = THREE.MathUtils.radToDeg(Math.atan2(toX, toZ));
+                cameraSnapRef.current = {
+                  startYaw: cameraStateRef.current.yaw,
+                  endYaw: targetYaw,
+                  elapsed: 0,
+                  duration: 0.34,
+                };
+                cameraTargetRef.current.pitch = 24;
+              }
+            }
+
             playSploosh(0.95);
           } else {
             showToast(
               `${gate.id.toUpperCase()}: match marker shape + stay low (front can face either way)`
             );
           }
+        }
+      }
+
+      for (const doorVisual of Object.values(gateDoorRefs.current)) {
+        doorVisual.openness = lerp(
+          doorVisual.openness,
+          doorVisual.targetOpenness,
+          Math.min(1, dt * 7.5)
+        );
+        const openness = clamp(doorVisual.openness, 0, 1);
+        doorVisual.door.position.y = lerp(doorVisual.closedY, doorVisual.openY, openness);
+
+        const doorMat = doorVisual.door.material as THREE.MeshStandardMaterial;
+        doorMat.emissive = new THREE.Color().setRGB(
+          lerp(0.32, 0.06, openness),
+          lerp(0.12, 0.42, openness),
+          lerp(0.12, 0.22, openness)
+        );
+        doorMat.emissiveIntensity = lerp(0.26, 0.7, openness);
+
+        if (doorVisual.beam) {
+          const beamMat = doorVisual.beam.material as THREE.MeshStandardMaterial;
+          beamMat.transparent = true;
+          beamMat.opacity = lerp(1, 0, openness);
+          beamMat.emissive = new THREE.Color().setRGB(lerp(0.15, 0, openness), lerp(0.1, 0, openness), lerp(0.04, 0, openness));
+          beamMat.emissiveIntensity = lerp(0.2, 0, openness);
+          doorVisual.beam.visible = openness < 0.98;
+        }
+
+        for (const indicator of doorVisual.indicators) {
+          const im = indicator.material as THREE.MeshStandardMaterial;
+          im.color = new THREE.Color().setRGB(
+            lerp(1.0, 0.2, openness),
+            lerp(0.3, 0.95, openness),
+            lerp(0.3, 0.45, openness)
+          );
+          im.emissive = new THREE.Color().setRGB(
+            lerp(0.4, 0.06, openness),
+            lerp(0.06, 0.38, openness),
+            lerp(0.06, 0.14, openness)
+          );
+          im.emissiveIntensity = lerp(0.82, 1.1, openness);
         }
       }
 
@@ -956,7 +1146,36 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       const cameraState = cameraStateRef.current;
       const follow = cameraFollowRef.current;
 
-      cameraState.yaw = lerp(cameraState.yaw, cameraTarget.yaw, Math.min(1, dt * 16));
+      if (!cameraSnapRef.current && pendingTurnRef.current !== 0) {
+        const step = pendingTurnRef.current > 0 ? 1 : -1;
+        pendingTurnRef.current -= step;
+        cameraSnapRef.current = {
+          startYaw: cameraState.yaw,
+          endYaw: cameraState.yaw + step * 90,
+          elapsed: 0,
+          duration: 0.22,
+        };
+      }
+
+      const activeSnap = cameraSnapRef.current;
+      if (activeSnap) {
+        activeSnap.elapsed += dt;
+        const t = clamp(activeSnap.elapsed / activeSnap.duration, 0, 1);
+        const eased = easeInOut(t);
+        const yawNow = lerp(activeSnap.startYaw, activeSnap.endYaw, eased);
+
+        cameraState.yaw = yawNow;
+        cameraTarget.yaw = yawNow;
+
+        if (t >= 1) {
+          cameraState.yaw = activeSnap.endYaw;
+          cameraTarget.yaw = activeSnap.endYaw;
+          cameraSnapRef.current = null;
+        }
+      } else {
+        cameraState.yaw = lerp(cameraState.yaw, cameraTarget.yaw, Math.min(1, dt * 16));
+      }
+
       cameraState.pitch = lerp(cameraState.pitch, cameraTarget.pitch, Math.min(1, dt * 16));
 
       follow.x = lerp(follow.x, stateNow.pos.x, Math.min(1, dt * 16));
@@ -1020,7 +1239,7 @@ function CubeLab({ onBack }: { onBack: () => void }) {
         lastHudRef.current = ts;
         setHud({
           speed: approxSpeed.toFixed(2),
-          cam: `${Math.round(cameraState.yaw)}°`,
+          cam: `${((Math.round(cameraState.yaw) % 360) + 360) % 360}°`,
           axis: axisNow,
           face,
         });
@@ -1045,6 +1264,8 @@ function CubeLab({ onBack }: { onBack: () => void }) {
       gateDoorRefs.current = {};
       gateTriggerRefs.current = {};
       activatedGatesRef.current = new Set();
+      cameraSnapRef.current = null;
+      pendingTurnRef.current = 0;
     };
   }, []);
 
@@ -1072,16 +1293,15 @@ function CubeLab({ onBack }: { onBack: () => void }) {
 
         <View style={styles.touchOverlay} {...panResponder.panHandlers}>
           <View style={styles.moveZoneHint} />
-          <View style={styles.cameraZoneHint} />
         </View>
 
-        <View style={styles.tutorialWrap}>
-          <Text style={styles.tutorialText}>Phone: swipe up rolls down • swipe down rolls up • right side orbits camera</Text>
-          <Text style={styles.tutorialText}>Desktop: A/D side roll • W back • S/Space forward • arrows camera</Text>
-          <Text style={styles.tutorialText}>Orange stamp + arrow = front of cream cheese block (for your reference).</Text>
-          <Text style={styles.tutorialText}>Gate checks marker shape alignment only; front can face either direction.</Text>
-          <Text style={styles.tutorialText}>Marker footprint matches block size; snap onto it with right orientation to unlock.</Text>
-          <Text style={styles.tutorialText}>Buildings are hard boundaries at the world edge.</Text>
+        <View pointerEvents="box-none" style={styles.cameraControlsRow}>
+          <Pressable style={styles.cameraRotateButton} onPress={() => queueCameraTurn(-1)}>
+            <Text style={styles.cameraRotateButtonText}>⟲</Text>
+          </Pressable>
+          <Pressable style={styles.cameraRotateButton} onPress={() => queueCameraTurn(1)}>
+            <Text style={styles.cameraRotateButtonText}>⟳</Text>
+          </Pressable>
         </View>
 
         {toast.length > 0 && (
@@ -1222,33 +1442,33 @@ const styles = StyleSheet.create({
     left: 0,
     top: 0,
     bottom: 0,
-    width: '52%',
+    width: '100%',
     backgroundColor: 'rgba(255,255,255,0.01)',
   },
-  cameraZoneHint: {
+  cameraControlsRow: {
     position: 'absolute',
-    right: 0,
-    top: 0,
-    bottom: 0,
-    width: '48%',
-    backgroundColor: 'rgba(255,255,255,0.01)',
+    bottom: 14,
+    left: 14,
+    right: 14,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
-  tutorialWrap: {
-    position: 'absolute',
-    bottom: 12,
-    alignSelf: 'center',
-    backgroundColor: 'rgba(4,10,20,0.66)',
+  cameraRotateButton: {
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    backgroundColor: 'rgba(9, 20, 37, 0.82)',
     borderWidth: 1,
-    borderColor: 'rgba(125,164,212,0.35)',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    gap: 2,
+    borderColor: 'rgba(142, 177, 224, 0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  tutorialText: {
+  cameraRotateButtonText: {
     color: '#d6e9ff',
-    fontWeight: '700',
-    fontSize: 12,
+    fontWeight: '900',
+    fontSize: 30,
+    lineHeight: 34,
   },
   toastWrap: {
     position: 'absolute',
